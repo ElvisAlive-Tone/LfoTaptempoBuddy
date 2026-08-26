@@ -1,13 +1,12 @@
 # LFO Taptempo Buddy
 
-ATtiny402 tap-tempo LFO firmware. PWM output is a waveform (Sin, Triangle, Ramp up,
-Ramp down, Pulse, Random) at the Speed set by the `Speed Pot` or by tapping. Intended
-for tremolo and similar analog modulation.
+Small but powerfull ATtiny402 based tap-tempo LFO firmware. Output is a waveform (Sin, Triangle, Pulse, Ramp up,
+Ramp down, Random) at the Speed set by the `Speed Pot` or by tapping. Multiple Random algorithms.
+Leslie like speed-up on long tap. Intended for tremolo and similar analog modulation effects.
 
-Finished in **ToDo** 2026
+**This code have not been tested yet!**
 
 This is an adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAlive-Tone/HydraDelayTaptempoBuddy).
-Hardware (PCB, schematics, BOM) is the same module.
 
 **Tip:** You can use my [Simple Serial UPDI programmer](https://github.com/ElvisAlive-Tone/updipcb) to program u-controller for this project.
 
@@ -28,7 +27,7 @@ Hardware (PCB, schematics, BOM) is the same module.
 - Random algorithm (Hybrid / S&H / Wander) is cycled with a **short tap then a long press** of the `Tap Button` (hold the second press over 500 ms). Works in any shape, takes effect when Random is selected.
   - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
   - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
-- Long `Tap Button` press from rest (over 500 ms, no short tap before it) is a Leslie ramp:
+- Leslie ramp effect - long `Tap Button` press from rest (over 500 ms, no short tap before it):
   - While held, Speed ramps up to 2x (half period, clamped at 50 ms) and stays there.
   - On release, Speed ramps back to the original period.
   - Press again during the slowdown to speed up again.
@@ -50,53 +49,46 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
 
 ## Wiring the module
 
-**TODO** PCB. 
-
 - Plan module and controls (`Tap Button`, `Shape` on-off-on, `Speed Pot`, `LED`) placement. Use long enough wires.
 - Power and output:
   - `GND` - ground
   - `OUT` - LFO voltage
   - `3V3` - 3.3 V power
-  - If you reuse a Hydra-style connector on a delay PCB: closest-to-edge square pad `GND`, center `OUT`, third `3V3`. A connector makes it easy to disconnect for programming.
+  - Use a connector to make it easy to disconnect for programming.
 - `Speed Pot` - connect pot's 1, 2 and 3 lugs to the module's `P1`, `P2` and `P3`.
-  Use `B` type pot, from `B10k` up to `B100k`. Higher voltage is higher Speed (shorter LFO period).
+  Use `B` type pot, from `B10k` up to `B100k`. Higher voltage is higher LFO Speed (shorter LFO period).
 - `Tap Button` - connect momentary button to the module's `TAP` pads.
 - `LED` - connect LED to the module's `L+` and `L-`. Use `TL` trimmer to set LED's brightness. Used `2k` value should
   be OK for the most LED types, if too small for your LED, use higher trimmer value, or connect additional resistor
   in series. Alternatively use fixed value resistor `RL` if you figured out exact value and wanna to save some space.
-- `Shape` switch - SPDT **on-off-on**. Common to `DIV` (PA2 / AIN2). Throws to `GND` and `3V3`. Two equal resistors (e.g. 10k) from `3V3` to `DIV` to `GND` so the center (off) sits at VCC/2.
-
-
-### Wiring details
+- `Shape` switch - SPDT **on-off-on**. Common to `SH`. Throws to `SHG` and `SH3`. 
+  ```
+    SH3 ---- throw     Pulse    /  Random
+                |
+    SH  ---- common    Triangle /  Ramp down
+                |
+    SHG ---- throw     Sin      /  Ramp up
+  ```
 
 ### LFO voltage `OUT` wiring
-
-Exact circuitry out of this module PCB depends on how you want to drive rest of the pedal circuit (VACTROL LED/s, JFETs etc).
 
 Analog `OUT` is the LFO control voltage PWM:
 - PCB contains simple filter to smooth it out. Cut frequency should be 100–200Hz, so eg. R=10kohm and C=100nF is good into high-Z load. So buffer it, or adjust filter for small-Z loads.
 - Maximal amplitude is 3.3V, so scalling may be necessary.
 - You have to implement LFO `Depth` pot if you want it.
- 
-#### Shape switch wiring
 
-```
-  3V3 ---- throw     Pulse    /  Random     ADC ~1023
-              |
-             R5 - 10k
-              |
-  DIV ---- common    Triangle /  Ramp down  ADC ~512   (center off: divider only)
-              |
-             R6 - 10k
-              |
-  GND ---- throw     Sin      /  Ramp up    ADC ~0
-```
+Exact circuitry consuming this module output depends on how do you want to drive the rest of the pedal circuit - VACTROL LED/s, lamp, JFETs etc.
 
 ## Building module
 
-**TODO** Module schematics:
+Module schematics:
 
-<img src="img/schematics.png" width="600px" alt="Module schematics">
+**TODO** image <img src="img/schematics.png" width="600px" alt="Module schematics">
+
+Necessary changes from Hydra Delay Taptempo Buddy:
+
+- `Shape` switch - 2x R 10k (R5, R6) from common to GND and 3V3
+- PWM `OUT` filter values update?
 
 PCB BOM:
 
@@ -122,9 +114,9 @@ External components:
 | `Tap Button` | any momentary switch                       |
 | `Shape`      | SPDT on-off-on                             |
 
-PCB:
+PCB: 
 
-<img src="img/pcb.png" width="300px" alt="PCB">
+**TODO** image <img src="img/pcb.png" width="300px" alt="PCB">
 
 ## Functionality Tweaking
 
@@ -143,12 +135,12 @@ PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO appears after 
 
 ### Leslie Speed
 
-Hold Tap (from rest, over 500 ms) ramps to a faster Speed, then ramps back on release.
+Holding `Tap button` (from rest, over 500 ms) ramps to a faster Speed, then ramps back on release.
 
-The multiplier is `c_leslie_speed` in `firmware/src/main.c` - final Speed period on Leslie becomes `period / c_leslie_speed`.
+The multiplier is `c_leslie_speed` in `firmware/src/main.c` - final Speed period becomes `period / c_leslie_speed`.
 Default is 2. Use 3 for 3x, and so on — integer only. The fast period is still clamped at `c_lfo_min` (50 ms). 
 
-Speed ramping velocity is the `Speed Pot`, not this constant!
+Speed ramping velocity is derived from the `Speed Pot`, not this constant!
 
 ### Random shape algorithm
 
@@ -195,6 +187,10 @@ Be carefull, **never program it with 5V VCC when the module is connected to a 3.
 (Hydra / FV-1 and similar) - you can damage the DSP or other chips.
 
 I recommend to always disconnect it for programming, using a connector on the `GND` / `OUT` / `3V3` connection.
+
+## Changelog
+
+**ToDo**
 
 ## Changes from Hydra Delay Taptempo Buddy
 
