@@ -368,6 +368,22 @@ uint8_t debounce(void)
     return (0);
 }
 
+// Atomic 16-bit access vs ISR (AVR is 8-bit). Same cli/sei style as HydraDelayTaptempoBuddy.
+static inline uint16_t read_u16(volatile uint16_t *p)
+{
+    cli();
+    uint16_t v = *p;
+    sei();
+    return v;
+}
+
+static inline void write_u16(volatile uint16_t *p, uint16_t v)
+{
+    cli();
+    *p = v;
+    sei();
+}
+
 // Copy 16-bit ADC samples; ISR can otherwise tear pot/divsw across two bytes
 static inline void snap_adc(uint16_t *p, uint16_t *d)
 {
@@ -499,9 +515,7 @@ void set_lfo_period(uint16_t period_ms, uint8_t restart)
 // MOD: align LFO/LED to downbeat without changing rate (first tap)
 void lfo_restart_phase(void)
 {
-    cli();
-    lfo_phase = 0;
-    sei();
+    write_u16(&lfo_phase, 0);
 }
 
 // MOD: keep LFO period in c_lfo_min .. c_lfo_max
@@ -575,7 +589,7 @@ int main(void)
 
     // Wait until AIN2 has been sampled — `divsw` starts at 0 (GND = sin / ramp-up).
     ms = 0;
-    while (!adc_shape_ok && ms < 100)
+    while (!adc_shape_ok && read_u16(&ms) < 100)
         ;
     _delay_ms(20); // a couple more muxed conversions after the first AIN2 sample
 
@@ -648,7 +662,7 @@ int main(void)
             if (tap == 0)
             {
                 //  check delay elapsed
-                if (ms > 1000)
+                if (read_u16(&ms) > 1000)
                 {
                     // write change to EEPROM
                     eeprom_save(0, mstempo, lfo_random_mode, shape_bank);
@@ -669,7 +683,7 @@ int main(void)
             if (nbtap > 1) // if too long between taps, persist values and resets tapping process
             {
                 // 3 cycles of current tempo, but never more than c_tap_end_max
-                if (ms > (3 * mstempo) || ms > c_tap_end_max)
+                if (read_u16(&ms) > (3 * mstempo) || read_u16(&ms) > c_tap_end_max)
                 {
                     // write changed values into EEPROM
                     eeprom_save(1, mstempo, lfo_random_mode, shape_bank);
@@ -681,7 +695,7 @@ int main(void)
                     tapping = 0;
                 }
             }
-            else if (nbtap == 1 && ms > c_tap_end_max) // single tap align only; window must fit c_lfo_max
+            else if (nbtap == 1 && read_u16(&ms) > c_tap_end_max) // single tap align only; window must fit c_lfo_max
             {
                 ms = 0;
                 nbtap = 0;
@@ -694,7 +708,7 @@ int main(void)
         {
             laststate = 0;
             previouspot = pot_now;
-            if (nbtap == 1 && !first_tap_released && !second_down && ms < 500)
+            if (nbtap == 1 && !first_tap_released && !second_down && read_u16(&ms) < 500)
             {
                 first_tap_released = 1; // short first tap done; a following long press will cycle random mode
             }
@@ -724,10 +738,10 @@ int main(void)
                 second_down = 0;
                 lfo_restart_phase();
             }
-            else if (nbtap == 1 && first_tap_released && ms >= 50)
+            else if (nbtap == 1 && first_tap_released && read_u16(&ms) >= 50)
             {
                 // press after a short tap: wait to see if it is a short tap (tempo) or long (random mode)
-                pending_interval = ms;
+                pending_interval = read_u16(&ms);
                 if (TCA0.SINGLE.CNT >= 500)
                 {
                     pending_interval++;
@@ -736,14 +750,15 @@ int main(void)
                 laststate = 1;
                 second_down = 1;
             }
-            else if (nbtap > 1 && ms >= 50) // further taps: average tempo
+            else if (nbtap > 1 && read_u16(&ms) >= 50) // further taps: average tempo
             {
+                uint16_t interval = read_u16(&ms);
                 if (TCA0.SINGLE.CNT >= 500)
                 {
-                    ms++;
+                    interval++;
                 }
 
-                mstempo = (mstempo + ms) / 2;
+                mstempo = (mstempo + interval) / 2;
                 divtempo = (divtempo + mstempo) / 2;
                 divtempo = period_range(divtempo);
                 mstempo = divtempo;
@@ -757,7 +772,7 @@ int main(void)
         }
         else if (currentstate == 1 && laststate == 1) // Tap button keeps on
         {
-            if (ms >= 500)
+            if (read_u16(&ms) >= 500)
             {
                 if (second_down)
                 {
