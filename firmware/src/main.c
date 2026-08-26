@@ -107,7 +107,9 @@ const uint8_t c_leslie_speed = 2;
 const uint16_t c_shape_mid_lo = 256;
 const uint16_t c_shape_mid_hi = 768;
 
-// Firmware revision in the binary (volatile so the compiler keeps it).
+// Firmware revision info in uC binary code for further reference.
+// Must be volatile so the compiler keeps it.
+// Starts by `rev_` to find it easily in the binary - kept in sync with the README.md changelog.
 volatile char revision[] = "rev_1";
 
 volatile uint16_t pot;         // current Pot value is stored here from ADC by interrupt handler

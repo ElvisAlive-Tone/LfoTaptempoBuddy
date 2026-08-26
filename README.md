@@ -20,11 +20,12 @@ This is an adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAl
   - Subsequent tap times are averaged until tapping finishes.
   - Tapping finishes if the next tap is not performed for 3 periods of the current Speed, but never later than 2.5 s.
   - A very slow subsequent taps (gap between 2 s and 2.5 s) still counts; only that interval is clamped to 2 s. Faster taps are left as measured.
+- Move `Speed Pot` at least 5% to switch control back to it.
 - `Shape` on-off-on switch selects the LFO waveform:
   - Flip **without** holding `Tap Button` — bank 0: Sin, Triangle, Pulse.
   - Flip **while holding** `Tap Button` — bank 1: Ramp up, Ramp down, Random.
   - That `Tap Button` hold is still a tap: first press aligns phase, and past 500 ms it starts Leslie (or cycles the Random algorithm). Release before 500 ms if you only want the other shape. Do not flip `Shape` switch once Leslie is already ramping — the main loop is busy, so it would see the change after Tap goes up, and apply bank 0.
-- Random algorithm (Hybrid / S&H / Wander) is cycled with a **short tap then a long press** of the `Tap Button` (hold the second press over 500 ms). Works in any shape, takes effect when Random is selected.
+- Random shape algorithm (Hybrid / S&H / Wander) is cycled with a **short tap then one long press** of the `Tap Button` (hold the second press over 500 ms). Works in any shape, takes effect when Random is selected.
   - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
   - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
 - Leslie ramp effect - long `Tap Button` press from rest (over 500 ms, no short tap before it):
@@ -32,7 +33,6 @@ This is an adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAl
   - On release, Speed ramps back to the original period.
   - Press again during the slowdown to speed up again.
   - Ramping velocity depends on `Speed Pot` (higher = faster ramp).
-- Move `Speed Pot` at least 5% to switch control back to it.
 - Current `Speed Pot`/`Tap Button` control state, tapped-in Speed, Random algorithm, and shape bank are preserved over power-off.
 - Trimmer or fixed resistor to set LED brightness.
 - UPDI pins to re-program soldered u-controller.
@@ -190,7 +190,10 @@ I recommend to always disconnect it for programming, using a connector on the `G
 
 ## Changelog
 
-**ToDo**
+Revision string of each version is baked into firmware binary.
+
+* v1.0 - `rev_1` - work in progress
+  - initial release
 
 ## Changes from Hydra Delay Taptempo Buddy
 
