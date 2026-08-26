@@ -16,15 +16,16 @@
  *
  * MODs vs Hydra Delay Taptempo Buddy (marked in source by `MOD:`):
  * - PWM is an LFO waveform, not a DC delay-time / Speed voltage
- * - "Tempo Division Switch" pin is analog LFO shape select (rotary switch +
- *   resistor ladder, 6 voltage layers) instead of digital Head 2 / Head 4
+ * - "Tempo Division Switch" pin is analog LFO shape select: on-off-on
+ *   (GND / VCC/2 / VCC) for sin, triangle, pulse; hold Tap while flipping
+ *   for ramp up, ramp down, random. Bank stored in EEPROM.
  * - LED always blinks, locked to LFO phase (including pot-control mode)
  * - First tap aligns LFO/LED to the downbeat without changing rate
  * - Tap-session timeout capped at c_tap_end_max (first-tap window too)
  * - LFO period range 50-2000 ms instead of Hydra delay 150-920 ms
  * - Long-press is a Leslie ramp (2x speed while held, ramp back on release;
  *   Speed pot sets ramp velocity), not a bounce through the whole delay range
- * - Short tap then long press cycles Random algorithm (S&H / wander / hybrid);
+ * - Short tap then long press cycles Random algorithm (hybrid / S&H / wander);
  *   LED blinks 1-3 times to show the mode; stored in EEPROM
  *
  * Pinout:
@@ -32,27 +33,19 @@
  * 2: Momentary Tap Tempo Button Digital Input
  * 3: LED+ Output
  * 4: Speed Potentiometer Analog Input
- * 5: LFO Shape rotary switch Analog Input (AIN2) // MOD: was digital Head 2/4
+ * 5: LFO Shape on-off-on Analog Input (AIN2) // MOD: was digital Head 2/4
  * 6: Reset/UPDI
  * 7: PWM Output // MOD: LFO waveform (was DC Speed voltage)
  * 8: GND
  *
- * Shape rotary switch (PA2 / AIN2): 6-position switch + 5 equal resistors (e.g. 10k)
+ * Shape switch (PA2 / AIN2): on-off-on, common to DIV.
+ * Center (off) is VCC/2 via two equal resistors (e.g. 10k) from 3V3 to GND.
  *
- *   3V3 ---- pos0
- *         R
- *        ---- pos1
- *         R
- *        ---- pos2
- *         R
- *        ---- pos3
- *         R
- *        ---- pos4
- *         R
- *   GND ---- pos5
+ *   GND  ----  sin            /  ramp up    (hold Tap while flipping)
+ *   1/2  ----  triangle       /  ramp down
+ *   3V3  ----  pulse          /  random
  *
- * Switch common -> PA2. Ideal 10-bit ADC: 1023, 818, 614, 409, 205, 0.
- * pos0 (3V3) SIN, pos1 TRI, pos2 RAMP_UP, pos3 RAMP_DOWN, pos4 PULSE, pos5 (GND) RANDOM.
+ * Flip without Tap: normal bank. Flip with Tap held: alt bank. Bank is in EEPROM.
  */
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -63,12 +56,12 @@
 #define PWM_PIN 3 // PWM is the analog LFO after RC filtering
 #define TAP_PIN 6
 #define LED_PIN 7
-#define POT_PIN 1 // higher voltage higher Speed -> shorter LFO period
-#define DIV_PIN 2 // MOD: analog shape select (AIN2); was digital Head 2/4
+#define POT_PIN 1           // higher voltage higher Speed -> shorter LFO period
+#define DIV_PIN 2           // MOD: analog shape select (AIN2); on-off-on GND / VCC/2 / VCC
 #define DEBOUNCE_TIME 900   // Tap tempo button debounce time [us]
 #define POT_MAX_VALUE 0x3FF // 10bit ADC max value to convert pot
 
-// MOD: LFO shapes selected by analog voltage layers on DIV_PIN
+// MOD: LFO shapes from on-off-on layers on DIV_PIN (bank from Tap-while-flip, EEPROM)
 #define LFO_SIN 0
 #define LFO_TRI 1
 #define LFO_RAMP_UP 2
@@ -79,21 +72,24 @@
 // Which algorithm the Random shape (LFO_RANDOM) uses at runtime (`lfo_random_mode`).
 // LFO_RANDOM_MODE is the default when EEPROM is empty / invalid.
 // Cycle at runtime: short tap, then long press (see main tap handler).
-//   LFO_RANDOM_SNH    - stepped sample-and-hold: new level once per cycle, held until the next
-//                       (default; typical tap-tempo LFO "random")
-//   LFO_RANDOM_WANDER - linear glide from the last value to the next over each cycle (smooth)
-//   LFO_RANDOM_HYBRID - S&H when period < c_random_hybrid_ms, wander when slower
-#define LFO_RANDOM_SNH 0
-#define LFO_RANDOM_WANDER 1
-#define LFO_RANDOM_HYBRID 2
-#define LFO_RANDOM_MODE LFO_RANDOM_SNH
-// 0 = announce stored Random mode on power-up only if the rotary is on Random
+//   LFO_RANDOM_HYBRID - S&H when period < c_random_hybrid_ms, wander when slower (default; 1 blink)
+//   LFO_RANDOM_SNH    - stepped sample-and-hold: new level once per cycle, held until the next (2 blinks)
+//   LFO_RANDOM_WANDER - linear glide from the last value to the next over each cycle (smooth; 3 blinks)
+#define LFO_RANDOM_HYBRID 0
+#define LFO_RANDOM_SNH 1
+#define LFO_RANDOM_WANDER 2
+#define LFO_RANDOM_MODE LFO_RANDOM_HYBRID
+// 0 = announce Random hybrid/S&H/wander on power-up only if that shape is selected
 // 1 = always announce on power-up (any shape)
 #define ANNOUNCE_RANDOM_ON_BOOT_ALWAYS 0
 
-const uint16_t EEPROM_TAP = 0x1400;     // one byte to store `tap` variable
-const uint16_t EEPROM_TEMPO = 0x1401;   // two bytes to store `mstempo` variable
-const uint16_t EEPROM_RANDOM = 0x1403;  // one byte to store `lfo_random_mode`
+#define SHAPE_BANK_NORMAL 0 // sin / triangle / pulse
+#define SHAPE_BANK_ALT 1    // ramp up / ramp down / random
+
+const uint16_t EEPROM_TAP = 0x1400;    // one byte to store `tap` variable
+const uint16_t EEPROM_TEMPO = 0x1401;  // two bytes to store `mstempo` variable
+const uint16_t EEPROM_RANDOM = 0x1403; // one byte to store `lfo_random_mode`
+const uint16_t EEPROM_BANK = 0x1404;   // one byte to store shape bank (0=normal, 1=alt)
 
 // MOD: LFO period range (was Hydra delay 150-920 ms)
 const uint16_t c_pwm_max = 999;
@@ -105,17 +101,18 @@ const uint16_t c_tap_end_max = 2500;
 // Used only when lfo_random_mode is LFO_RANDOM_HYBRID: period [ms] below this → S&H, slower → wander.
 const uint16_t c_random_hybrid_ms = 400;
 
-// Midpoints between ideal ladder voltages 0, 205, 409, 614, 818, 1023
-const uint16_t c_shape_thr[] = {102, 307, 512, 716, 921};
+// On-off-on shape switch: midpoints between 0, ~512, 1023
+const uint16_t c_shape_mid_lo = 256;
+const uint16_t c_shape_mid_hi = 768;
 
 // Firmware revision in the binary (volatile so the compiler keeps it).
 volatile char revision[] = "rev_1";
 
-volatile uint16_t pot;       // current Pot value is stored here from ADC by interrupt handler
-volatile uint16_t divsw;     // current shape-switch ADC value (AIN2)
+volatile uint16_t pot;         // current Pot value is stored here from ADC by interrupt handler
+volatile uint16_t divsw;       // current shape-switch ADC value (AIN2)
 volatile uint8_t adc_shape_ok; // 1 after AIN2 has been sampled at least once
-volatile uint16_t pwm = 500; // current PWM sample (0..c_pwm_max), written by LFO in TCA ISR
-volatile uint16_t ms;        // time [ms] counter for Tap button pressed length and delayed `tap` reset in EEPROM respectively. Incremented in TCA interrupt.
+volatile uint16_t pwm = 500;   // current PWM sample (0..c_pwm_max), written by LFO in TCA ISR
+volatile uint16_t ms;          // time [ms] counter for Tap button pressed length and delayed `tap` reset in EEPROM respectively. Incremented in TCA interrupt.
 
 volatile uint16_t lfo_phase = 0; // 16-bit phase accumulator, one wrap = one LFO cycle
 volatile uint16_t lfo_inc = 131; // added to phase every 1 ms (65536/500 ≈ 131)
@@ -147,7 +144,6 @@ void IO_Init(void)
     PORTA.DIRSET = (1 << PWM_PIN) | (1 << LED_PIN);
     // pull up for tap button only
     PORTA_PIN6CTRL |= PORT_PULLUPEN_bm; // Tap tempo button
-    // MOD: DIV pin is analog (shape ladder) - disable digital input buffer, no pull-up
     PORTA_PIN2CTRL = PORT_ISC_INPUT_DISABLE_gc;
     PORTA_PIN1CTRL = PORT_ISC_INPUT_DISABLE_gc; // Pot pin
 }
@@ -169,7 +165,7 @@ void ADC_Config(void)
 }
 
 // interrupt handler for ADC
-// MOD: alternate pot (AIN1) and shape switch (AIN2); Hydra only sampled the pot
+// ADC mux: pot (AIN1) and on-off-on shape switch (AIN2)
 ISR(ADC0_RESRDY_vect)
 {
     switch (ADC0.MUXPOS)
@@ -242,7 +238,7 @@ static void random_on_wrap(uint16_t phase)
 static uint8_t random_wander(uint16_t phase)
 {
     int16_t d = (int16_t)rnd_to - (int16_t)rnd_from;
-    return (uint8_t)(rnd_from + ((d * (int16_t)(phase >> 8)) >> 8));
+    return (uint8_t)(rnd_from + (((int32_t)d * (phase >> 8)) >> 8));
 }
 
 // Stepped sample-and-hold: hold rnd_to until the next wrap.
@@ -370,36 +366,53 @@ uint8_t debounce(void)
     return (0);
 }
 
-// MOD: map analog voltage layer on shape switch to LFO shape 0..5
-// Layer 0 = GND (pos5) .. layer 5 = 3V3 (pos0). First rotary position (3V3) is SIN.
-uint8_t shape_from_adc(uint16_t adc)
+// Copy 16-bit ADC samples; ISR can otherwise tear pot/divsw across two bytes
+static inline void snap_adc(uint16_t *p, uint16_t *d)
 {
-    uint8_t layer;
-    if (adc < c_shape_thr[0])
+    cli();
+    *p = pot;
+    *d = divsw;
+    sei();
+}
+
+// On-off-on: GND / ~VCC/2 / VCC → layer 0 / 1 / 2
+uint8_t layer_from_adc(uint16_t adc)
+{
+    if (adc < c_shape_mid_lo)
     {
-        layer = 0;
+        return 0;
     }
-    else if (adc < c_shape_thr[1])
+    if (adc < c_shape_mid_hi)
     {
-        layer = 1;
+        return 1;
     }
-    else if (adc < c_shape_thr[2])
+    return 2;
+}
+
+// MOD: layer + bank → shape (normal: sin/tri/pulse, alt: ramp up/down/random)
+uint8_t shape_from_layer(uint8_t layer, uint8_t bank)
+{
+    if (bank == SHAPE_BANK_ALT)
     {
-        layer = 2;
+        if (layer == 0)
+        {
+            return LFO_RAMP_UP;
+        }
+        if (layer == 1)
+        {
+            return LFO_RAMP_DOWN;
+        }
+        return LFO_RANDOM;
     }
-    else if (adc < c_shape_thr[3])
+    if (layer == 0)
     {
-        layer = 3;
+        return LFO_SIN;
     }
-    else if (adc < c_shape_thr[4])
+    if (layer == 1)
     {
-        layer = 4;
+        return LFO_TRI;
     }
-    else
-    {
-        layer = 5;
-    }
-    return (uint8_t)(LFO_RANDOM - layer);
+    return LFO_PULSE;
 }
 
 // one blink of LED (150 ms on, 150 ms off); caller must set led_follow_lfo = 0
@@ -411,7 +424,7 @@ void blink(void)
     _delay_ms(150);
 }
 
-// LED: 1 blink = S&H, 2 = wander, 3 = hybrid
+// LED: 1 blink = hybrid, 2 = S&H, 3 = wander
 void announce_random_mode(uint8_t mode)
 {
     led_follow_lfo = 0;
@@ -438,12 +451,13 @@ void eeprom_persist(void)
     sei();
 }
 
-// PAGEERASEWRITE erases the whole EEPROM page — write tap, tempo and random mode together
-void eeprom_save(uint8_t tap_val, uint16_t tempo_val, uint8_t rnd_mode)
+// PAGEERASEWRITE erases the whole EEPROM page — write tap, tempo, random mode and shape bank together
+void eeprom_save(uint8_t tap_val, uint16_t tempo_val, uint8_t rnd_mode, uint8_t bank)
 {
     *(uint8_t *)(EEPROM_TAP) = tap_val;
     *(uint16_t *)(EEPROM_TEMPO) = tempo_val;
     *(uint8_t *)(EEPROM_RANDOM) = rnd_mode;
+    *(uint8_t *)(EEPROM_BANK) = bank;
     eeprom_persist();
 }
 
@@ -513,16 +527,18 @@ int main(void)
     CLKCTRL.MCLKLOCK |= CLKCTRL_LOCKEN_bm;
 
     // init other values
-    uint8_t currentstate = 0;     // Current state of Tap button in the cycle of main loop
-    uint8_t laststate = 0;        // Laststate of Tap button
-    uint8_t nbtap = 0;            // Number of subsequent taps during current tapping
-    uint8_t tapping = 0;          // Tapping currently in progress (1) or not (0)
-    uint16_t divtempo = 500;      // Current LFO period in [ms]
-    uint16_t previouspot;         // Previous Time Pot value to be able to detect change 0-1024
-    uint8_t eeprom_reset_tap = 0; // Flag for delayed `tap` reset in EEPROM
+    uint8_t currentstate = 0;       // Current state of Tap button in the cycle of main loop
+    uint8_t laststate = 0;          // Laststate of Tap button
+    uint8_t nbtap = 0;              // Number of subsequent taps during current tapping
+    uint8_t tapping = 0;            // Tapping currently in progress (1) or not (0)
+    uint16_t divtempo = 500;        // Current LFO period in [ms]
+    uint16_t previouspot;           // Previous Time Pot value to be able to detect change 0-1024
+    uint8_t eeprom_reset_tap = 0;   // Flag for delayed `tap` reset in EEPROM
     uint8_t first_tap_released = 0; // 1 after a short first tap; next long press cycles random mode
     uint8_t second_down = 0;        // 1 while the press after that short tap is held
     uint16_t pending_interval = 0;  // gap [ms] from first tap to that second press
+    uint8_t shape_bank = SHAPE_BANK_NORMAL;
+    uint8_t shape_layer = 0;
 
     // read values from EEPROM
     while (NVMCTRL.STATUS & NVMCTRL_EEBUSY_bm) // Wait for EEPROM not busy.
@@ -530,6 +546,7 @@ int main(void)
     uint8_t tap = *(uint8_t *)(EEPROM_TAP);         // Current control status - 1 for tap tempo, 0 for pot control
     uint16_t mstempo = *(uint16_t *)(EEPROM_TEMPO); // Currently tapped in tempo in ms
     lfo_random_mode = *(uint8_t *)(EEPROM_RANDOM);
+    shape_bank = *(uint8_t *)(EEPROM_BANK);
     // check values from EEPROM and patch them just in case
     if (mstempo < c_lfo_min || mstempo > c_lfo_max)
     {
@@ -539,9 +556,13 @@ int main(void)
     {
         tap = 0;
     }
-    if (lfo_random_mode > LFO_RANDOM_HYBRID)
+    if (lfo_random_mode > LFO_RANDOM_WANDER)
     {
         lfo_random_mode = LFO_RANDOM_MODE;
+    }
+    if (shape_bank > SHAPE_BANK_ALT)
+    {
+        shape_bank = SHAPE_BANK_NORMAL;
     }
 
     // enable interrupts
@@ -550,10 +571,7 @@ int main(void)
     TCA_Config();
     ADC_Config();
 
-    // ADC uses VDD as reference and the rotary is a divider from VDD, so the
-    // reading is ratiometric (stable even while 3V3 finishes rising).
-    // Wait until AIN2 has actually been sampled — `divsw` is 0 in BSS, which
-    // is the Random layer, so we must not announce from the default.
+    // Wait until AIN2 has been sampled — `divsw` starts at 0 (GND = sin / ramp-up).
     ms = 0;
     while (!adc_shape_ok && ms < 100)
         ;
@@ -561,7 +579,11 @@ int main(void)
 
     // Initialize from values stored in EEPROM / pot *before* any LED announce,
     // otherwise the blinks run at the default 500 ms LFO instead of the saved rate.
-    lfo_shape = shape_from_adc(divsw);
+    uint16_t pot_now;
+    uint16_t div_now;
+    snap_adc(&pot_now, &div_now);
+    shape_layer = layer_from_adc(div_now);
+    lfo_shape = shape_from_layer(shape_layer, shape_bank);
     if (tap == 1)
     {
         divtempo = period_range(mstempo);
@@ -570,10 +592,10 @@ int main(void)
     }
     else
     {
-        divtempo = pot_to_period(pot);
+        divtempo = pot_to_period(pot_now);
         set_lfo_period(divtempo, 0);
     }
-    previouspot = pot;
+    previouspot = pot_now;
 
     if (lfo_shape == LFO_RANDOM || ANNOUNCE_RANDOM_ON_BOOT_ALWAYS)
     {
@@ -583,17 +605,30 @@ int main(void)
     // Main loop
     while (1)
     {
+        snap_adc(&pot_now, &div_now);
 
-        // SHAPE SWITCH handling - analog voltage layers from rotary + resistor ladder
-        lfo_shape = shape_from_adc(divsw);
+        // Shape: on-off-on. Flip without Tap = normal bank; flip with Tap held = alt bank.
+        // Holding Tap for the alt bank also phase-aligns (first press) and starts Leslie
+        // if held ≥500 ms. Flip, then release before 500 ms if you only want the new shape.
+        {
+            uint8_t layer = layer_from_adc(div_now);
+            if (layer != shape_layer)
+            {
+                uint8_t tap_held = !(PORTA.IN & (1 << TAP_PIN));
+                shape_layer = layer;
+                shape_bank = tap_held ? SHAPE_BANK_ALT : SHAPE_BANK_NORMAL;
+                lfo_shape = shape_from_layer(shape_layer, shape_bank);
+                eeprom_save(tap, mstempo, lfo_random_mode, shape_bank);
+            }
+        }
 
         // TIME POT handling
         // if pot move of more than 5%, changing to pot control
-        if ((tap == 1 && tapping == 0 && abs(previouspot - pot) >= 50) || (tap == 0 && tapping == 0 && abs(previouspot - pot) >= 10))
+        if ((tap == 1 && tapping == 0 && abs(previouspot - pot_now) >= 50) || (tap == 0 && tapping == 0 && abs(previouspot - pot_now) >= 10))
         {
-            divtempo = pot_to_period(pot);
+            divtempo = pot_to_period(pot_now);
             set_lfo_period(divtempo, 0);
-            previouspot = pot;
+            previouspot = pot_now;
             // delay EEPROM change due to power-off pot value changes
             if (tap == 1)
             {
@@ -614,7 +649,7 @@ int main(void)
                 if (ms > 1000)
                 {
                     // write change to EEPROM
-                    eeprom_save(0, mstempo, lfo_random_mode);
+                    eeprom_save(0, mstempo, lfo_random_mode, shape_bank);
                     eeprom_reset_tap = 0;
                 }
             }
@@ -635,7 +670,7 @@ int main(void)
                 if (ms > (3 * mstempo) || ms > c_tap_end_max)
                 {
                     // write changed values into EEPROM
-                    eeprom_save(1, mstempo, lfo_random_mode);
+                    eeprom_save(1, mstempo, lfo_random_mode, shape_bank);
 
                     // reset state machine
                     tap = 1;
@@ -656,7 +691,7 @@ int main(void)
         else if (currentstate == 0 && laststate == 1) // Tap button just released
         {
             laststate = 0;
-            previouspot = pot;
+            previouspot = pot_now;
             if (nbtap == 1 && !first_tap_released && !second_down && ms < 500)
             {
                 first_tap_released = 1; // short first tap done; a following long press will cycle random mode
@@ -726,11 +761,11 @@ int main(void)
                 {
                     // MOD: short tap then long press cycles Random algorithm
                     lfo_random_mode++;
-                    if (lfo_random_mode > LFO_RANDOM_HYBRID)
+                    if (lfo_random_mode > LFO_RANDOM_WANDER)
                     {
-                        lfo_random_mode = LFO_RANDOM_SNH;
+                        lfo_random_mode = LFO_RANDOM_HYBRID;
                     }
-                    eeprom_save(tap, mstempo, lfo_random_mode);
+                    eeprom_save(tap, mstempo, lfo_random_mode, shape_bank);
                     announce_random_mode(lfo_random_mode);
                     while (debounce())
                     {
@@ -740,66 +775,68 @@ int main(void)
                     nbtap = 0;
                     tapping = 0;
                     laststate = 0;
-                    previouspot = pot;
+                    previouspot = pot_now;
                 }
                 else
                 {
-                // Hold: ramp to 2x LFO speed. Release: ramp back to the original rate.
-                // Speed pot sets how fast that change happens (higher = faster ramp).
-                uint16_t ramp_origin = divtempo;
-                uint16_t ramp_target = ramp_origin / 2;
-                if (ramp_target < c_lfo_min)
-                {
-                    ramp_target = c_lfo_min;
-                }
-                uint8_t to_fast = 1;
-
-                for (;;)
-                {
-                    uint8_t held = !(PORTA.IN & (1 << TAP_PIN));
-                    if (to_fast)
+                    // Hold: ramp to 2x LFO speed. Release: ramp back to the original rate.
+                    // Speed pot sets how fast that change happens (higher = faster ramp).
+                    uint16_t ramp_origin = divtempo;
+                    uint16_t ramp_target = ramp_origin / 2;
+                    if (ramp_target < c_lfo_min)
                     {
-                        if (!held)
-                        {
-                            to_fast = 0; // released - start slowing back
-                        }
-                        else if (divtempo > ramp_target)
-                        {
-                            divtempo--;
-                        }
+                        ramp_target = c_lfo_min;
                     }
-                    else
+                    uint8_t to_fast = 1;
+
+                    for (;;)
                     {
-                        if (held)
+                        uint8_t held = !(PORTA.IN & (1 << TAP_PIN));
+                        if (to_fast)
                         {
-                            to_fast = 1; // pressed again during slowdown
-                        }
-                        else if (divtempo < ramp_origin)
-                        {
-                            divtempo++;
+                            if (!held)
+                            {
+                                to_fast = 0; // released - start slowing back
+                            }
+                            else if (divtempo > ramp_target)
+                            {
+                                divtempo--;
+                            }
                         }
                         else
                         {
-                            break; // back at original rate, button up
+                            if (held)
+                            {
+                                to_fast = 1; // pressed again during slowdown
+                            }
+                            else if (divtempo < ramp_origin)
+                            {
+                                divtempo++;
+                            }
+                            else
+                            {
+                                break; // back at original rate, button up
+                            }
+                        }
+
+                        set_lfo_period(divtempo, 0);
+
+                        snap_adc(&pot_now, &div_now);
+
+                        // higher Speed pot = faster ramping (shorter wait per 1 ms period step)
+                        for (uint16_t i = 0; i < ((POT_MAX_VALUE - pot_now) * 2); i++)
+                        {
+                            _delay_us(1);
                         }
                     }
-
-                    set_lfo_period(divtempo, 0);
-
-                    // higher Speed pot = faster ramping (shorter wait per 1 ms period step)
-                    for (uint16_t i = 0; i < ((POT_MAX_VALUE - pot) * 2); i++)
-                    {
-                        _delay_us(1);
-                    }
-                }
-                previouspot = pot;
-                // Leslie ate this press — do not treat it as a tap session
-                nbtap = 0;
-                tapping = 0;
-                first_tap_released = 0;
-                second_down = 0;
-                laststate = 0;
-                ms = 0;
+                    previouspot = pot_now;
+                    // Leslie ate this press — do not treat it as a tap session
+                    nbtap = 0;
+                    tapping = 0;
+                    first_tap_released = 0;
+                    second_down = 0;
+                    laststate = 0;
+                    ms = 0;
                 }
             }
         }

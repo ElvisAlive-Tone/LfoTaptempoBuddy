@@ -1,7 +1,7 @@
 # LFO Taptempo Buddy
 
-ATtiny402 tap-tempo LFO firmware. PWM output is a waveform (sin, triangle, ramp up,
-ramp down, pulse, random) at the speed set by the `Speed Pot` or by tapping. Intended
+ATtiny402 tap-tempo LFO firmware. PWM output is a waveform (Sin, Triangle, Ramp up,
+Ramp down, Pulse, Random) at the Speed set by the `Speed Pot` or by tapping. Intended
 for tremolo and similar analog modulation.
 
 Finished in **ToDo** 2026
@@ -13,26 +13,28 @@ Hardware (PCB, schematics, BOM) is the same module.
 
 ## Features
 
-- LFO speed can be controlled by `Speed Pot` or tapped by `Tap Button`. Period range is 50 ms (~20 Hz) to 2000 ms (~0.5 Hz).
-- `LED` always blinks at the LFO rate with 50% duty cycle, locked to the waveform (both pot and tap control).
+- LFO Speed can be controlled by `Speed Pot` or tapped by `Tap Button`. Period range is 50 ms (~20 Hz) to 2000 ms (~0.5 Hz).
+- `LED` always blinks at the LFO Speed with 50% duty cycle, locked to the waveform (both pot and tap control).
 - Tap `Tap Button` at least two times to switch from `Speed Pot` control to `Tap Button` control.
-  - First tap aligns LFO and `LED` to the downbeat without changing rate.
+  - First tap aligns LFO and `LED` to the downbeat without changing Speed.
   - Second tap must follow within 2.5 s after the first one.
   - Subsequent tap times are averaged until tapping finishes.
-  - Tapping finishes if the next tap is not performed for 3 periods of the current tempo, but never later than 2.5s.
-  - A gap between 2s and 2.5s still counts as a tap; the period is then clamped to 2s.
-- `Shape` rotary switch (on the old `Tap to Head` / `DIV` pin) selects the LFO waveform:
-  - sin, triangle, ramp up, ramp down, pulse, random.
-  - Random algorithm (S&H / wander / hybrid) is cycled with a **short tap then a long press** (hold the second press over 500 ms). Works in any shape; takes effect when Random is selected.
-    `LED` blinks **1 / 2 / 3** times (S&H / wander / hybrid) and the choice is stored in EEPROM.
-    The same blink is shown on power-up when the rotary is already on Random. See [Random shape algorithm](#random-shape-algorithm).
+  - Tapping finishes if the next tap is not performed for 3 periods of the current Speed, but never later than 2.5 s.
+  - A gap between 2 s and 2.5 s still counts as a tap; the period is then clamped to 2 s.
+- `Shape` on-off-on switch selects the LFO waveform:
+  - Flip **without** holding `Tap Button` — bank 0: Sin, Triangle, Pulse.
+  - Flip **while holding** `Tap Button` — bank 1: Ramp up, Ramp down, Random.
+  - That `Tap Button` hold is still a tap: first press aligns phase, and past 500 ms it starts Leslie (or cycles the Random algorithm). Release before 500 ms if you only want the other shape. Do not flip `Shape` switch once Leslie is already ramping — the main loop is busy, so it would see the change after Tap goes up, and apply bank 0.
+  - Random algorithm (Hybrid / S&H / Wander) is cycled with a **short tap then a long press** of the `Tap Button` (hold the second press over 500 ms). Works in any shape, takes effect when Random is selected.
+    - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
+    - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
 - Long press from rest (over 500 ms, no short tap before it) is a Leslie ramp:
-  - While held, speed ramps up to 2x (half period, clamped at 50 ms) and stays there.
-  - On release, speed ramps back to the original rate.
+  - While held, Speed ramps up to 2x (half period, clamped at 50 ms) and stays there.
+  - On release, Speed ramps back to the original period.
   - Press again during the slowdown to speed up again.
   - Ramping velocity depends on `Speed Pot` (higher = faster ramp).
 - Move `Speed Pot` at least 5% to switch control back to it.
-- Current `Speed Pot` or `Tap Button` control state, together with the tapped-in tempo, is preserved over power-off.
+- Current `Speed Pot`/`Tap Button` control state, tapped-in Speed, Random algorithm, and shape bank are preserved over power-off.
 - Trimmer or fixed resistor to set LED brightness.
 - UPDI pins to re-program soldered u-controller.
 
@@ -50,38 +52,45 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
 
 **TODO** PCB. 
 
-- Analog `OUT` is now the LFO control voltage PWM:
-  - it needs on-board filter to smooth it out, with 100–200Hz cut frequency (eg. RC 10kohm/100nF into high-Z load)
-  - it has max amplitude of 3.3V, so may need some scalling, depending how you drive rest of the circuit (VACTROL LEDs, JFETs etc)
-- Plan module and controls (`Tap Button`, `Shape` rotary, `Speed Pot`, `LED`) placement. Use long enough wires.
+- Plan module and controls (`Tap Button`, `Shape` on-off-on, `Speed Pot`, `LED`) placement. Use long enough wires.
 - Power and output:
   - `GND` - ground
   - `OUT` - LFO voltage
   - `3V3` - 3.3 V power
   - If you reuse a Hydra-style connector on a delay PCB: closest-to-edge square pad `GND`, center `OUT`, third `3V3`. A connector makes it easy to disconnect for programming.
-- `Speed` pot - connect pot's 1, 2 and 3 lugs to the module's `P1`, `P2` and `P3`.
+- `Speed Pot` - connect pot's 1, 2 and 3 lugs to the module's `P1`, `P2` and `P3`.
   Use `B` type pot, from `B10k` up to `B100k`. Higher voltage is higher Speed (shorter LFO period).
 - `Tap Button` - connect momentary button to the module's `TAP` pads.
 - `LED` - connect LED to the module's `L+` and `L-`. Use `TL` trimmer to set LED's brightness. Used `2k` value should
   be OK for the most LED types, if too small for your LED, use higher trimmer value, or connect additional resistor
   in series. Alternatively use fixed value resistor `RL` if you figured out exact value and wanna to save some space.
-- `Shape` switch - 6-position rotary with 5 equal resistors (e.g. 10k) as a divider. Switch common to `DIV` (PA2 / AIN2).
+- `Shape` switch - SPDT **on-off-on**. Common to `DIV` (PA2 / AIN2). Throws to `GND` and `3V3`. Two equal resistors (e.g. 10k) from `3V3` to `DIV` to `GND` so the center (off) sits at VCC/2.
+
+
+### Wiring details
+
+### LFO voltage `OUT` wiring
+
+Exact circuitry out of this module PCB depends on how you want to drive rest of the pedal circuit (VACTROL LED/s, JFETs etc).
+
+Analog `OUT` is the LFO control voltage PWM:
+- PCB contains simple filter to smooth it out. Cut frequency should be 100–200Hz, so eg. R=10kohm and C=100nF is good into high-Z load. So buffer it, or adjust filter for small-Z loads.
+- Maximal amplitude is 3.3V, so scalling may be necessary.
+- You have to implement LFO `Depth` pot if you want it.
+ 
+#### Shape switch wiring
 
 ```
-  3V3 ---- pos0  sin        ADC ~1023
-        R
-       ---- pos1  triangle   ADC ~818
-        R
-       ---- pos2  ramp up    ADC ~614
-        R
-       ---- pos3  ramp down  ADC ~409
-        R
-       ---- pos4  pulse      ADC ~205
-        R
-  GND ---- pos5  random     ADC ~0
+  3V3 ---- throw     Pulse    /  Random     ADC ~1023
+              |
+             R5 - 10k
+              |
+  DIV ---- common    Triangle /  Ramp down  ADC ~512   (center off: divider only)
+              |
+             R6 - 10k
+              |
+  GND ---- throw     Sin      /  Ramp up    ADC ~0
 ```
-
-On the Hydra buddy PCB, `D4` / `D2` were the two sides of the old on/on Head switch (VCC / GND). You can use those pads as the 3V3 and GND ends of the ladder.
 
 ## Building module
 
@@ -96,7 +105,7 @@ PCB BOM:
 | Markings           | Value             | PCB packaging type                                    |
 | ------------------ | ----------------- | ----------------------------------------------------- |
 | R1, R2             | 1k                | 1206                                                  |
-| R4                 | 10k               | 1206                                                  |
+| R4, R5, R6         | 10k               | 1206                                                  |
 | C1, C3, C4         | 100n              | 1206                                                  |
 | C2                 | 10u               | 5,3mm                                                 |
 | TL                 | 2k                | 3362 trimmer                                          |
@@ -111,7 +120,7 @@ External components:
 | `Speed Pot`  | B10k - B100k                               |
 | LED          | any color and size LED                     |
 | `Tap Button` | any momentary switch                       |
-| `Shape`      | 6-position rotary                          |
+| `Shape`      | SPDT on-off-on                             |
 
 PCB:
 
@@ -121,7 +130,7 @@ PCB:
 
 ### LFO period range
 
-Source code contains constants for the LFO period range and tap timeout. Change them and rebuild if you want a different speed span.
+Source code contains constants for the LFO period range and tap timeout. Change them and rebuild if you want a different Speed span.
 
 ```c
 const uint16_t c_lfo_max = 2000;   // slowest LFO period [ms] (~0.5 Hz) - Speed pot on minimum
@@ -134,25 +143,27 @@ PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO appears after 
 
 ### Random shape algorithm
 
-Random still follows the tapped or pot speed: one new random target per LFO cycle. What it *does* with that target is the mode:
+Random still follows the tapped or pot Speed, with one new random level per LFO cycle. What it *does* with that level is the algorithm:
 
-- **S&H** — jumps to a random level and sits there until the next beat (classic stepped random).
+- **Hybrid** — S&H for faster LFO (period is shorter than 400 ms), Wander when LFO is slower (default).
+- **S&H** — jumps to a random level and sits there until the next cycle (classic stepped random).
 - **Wander** — glides smoothly from the last level to the next over the cycle (no stairs; nicer when the LFO is slow).
-- **Hybrid** — S&H when the period is shorter than 400 ms, wander when it is slower.
 
-**How to switch:** tap once (short), then press and hold (longer than 500 ms). That is not a new tempo, and it is not Leslie — Leslie is a hold *without* a short tap first. You can do the gesture with any shape selected; it only matters when the rotary is on Random.
+**How to switch:** tap once (short), then press and hold (longer than 500 ms). That is not a new Speed, and it is not Leslie. 
+You can do this tap pattern with any shape selected, it only matters when Random shape is selected.
 
-The LED then blinks the new mode. The choice is stored in EEPROM, so it survives power-off:
+The LED then blinks the new algorithm. The choice is stored in EEPROM, so it survives power-off:
 
-- 1 blink — S&H
-- 2 blinks — wander
-- 3 blinks — hybrid
+- 1 blink — Hybrid
+- 2 blinks — S&H
+- 3 blinks — Wander
 
-The same blinks happen at power-up, but only if the rotary is already on Random (so other shapes do not look like a mode change). To always blink on boot, set `ANNOUNCE_RANDOM_ON_BOOT_ALWAYS` to `1` in `firmware/src/main.c`.
+The same blinks happen at power-up, but only if Random shape is already selected (so other shapes do not look like an algorithm change). 
+To always blink on boot, set `ANNOUNCE_RANDOM_ON_BOOT_ALWAYS` to `1` in `firmware/src/main.c`.
 
-A blank chip starts in S&H. To change that default, edit `LFO_RANDOM_MODE` in the same file. 
+A blank chip starts in Hybrid. To change that default, edit `LFO_RANDOM_MODE` in the same file. 
 
-The 400 ms hybrid split is `c_random_hybrid_ms`.
+The 400 ms Hybrid algorithm split is `c_random_hybrid_ms`.
 
 ## Compiling firmware
 
@@ -180,13 +191,13 @@ I recommend to always disconnect it for programming, using a connector on the `G
 Functional changes (also marked by `MOD:` in the source):
 
 - PWM is an LFO waveform, not a DC delay-time / Speed voltage.
-- "Tempo Division Switch" pin is analog LFO shape select (rotary + resistor ladder, 6 voltage layers) instead of digital Head 2 / Head 4.
+- "Tempo Division Switch" pin is analog LFO Shape select (on-off-on GND / VCC/2 / VCC; Tap-while-flip for Ramp up, Ramp down, Random; bank in EEPROM) instead of digital Head 2 / Head 4.
 - LED always blinks, locked to LFO phase (including pot-control mode).
-- First tap aligns LFO/LED to the downbeat without changing rate.
+- First tap aligns LFO/LED to the downbeat without changing Speed.
 - Tap-session timeout capped at 2.5 s (first-tap window too). Hydra used uncapped 3× tempo and a 1.5 s first-tap window.
 - LFO period range 50-2000 ms instead of Hydra delay 150-920 ms.
-- Long-press is a Leslie ramp (2× speed while held, ramp back on release; Speed pot sets ramp velocity), not a bounce through the whole delay range.
-- Short tap then long press cycles Random algorithm (S&H / wander / hybrid); LED blinks 1-3 times; stored in EEPROM.
+- Long-press is a Leslie ramp (2× Speed while held, ramp back on release; `Speed Pot` sets ramp velocity), not a bounce through the whole delay range.
+- Short tap then long press cycles Random algorithm (Hybrid / S&H / Wander); LED blinks 1-3 times; stored in EEPROM.
 
 ## License
 
