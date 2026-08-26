@@ -100,6 +100,8 @@ const uint16_t c_lfo_range = 1950; // c_lfo_max - c_lfo_min [ms]
 const uint16_t c_tap_end_max = 2500;
 // Used only when lfo_random_mode is LFO_RANDOM_HYBRID: period [ms] below this → S&H, slower → wander.
 const uint16_t c_random_hybrid_ms = 400;
+// Leslie hold: Speed multiplier (2 = twice as fast = half period). Integer; 3 = 3x, etc.
+const uint8_t c_leslie_speed = 2;
 
 // On-off-on shape switch: midpoints between 0, ~512, 1023
 const uint16_t c_shape_mid_lo = 256;
@@ -779,10 +781,10 @@ int main(void)
                 }
                 else
                 {
-                    // Hold: ramp to 2x LFO speed. Release: ramp back to the original rate.
+                    // Hold: ramp to c_leslie_speed × LFO Speed. Release: ramp back to the original period.
                     // Speed pot sets how fast that change happens (higher = faster ramp).
                     uint16_t ramp_origin = divtempo;
-                    uint16_t ramp_target = ramp_origin / 2;
+                    uint16_t ramp_target = ramp_origin / c_leslie_speed;
                     if (ramp_target < c_lfo_min)
                     {
                         ramp_target = c_lfo_min;

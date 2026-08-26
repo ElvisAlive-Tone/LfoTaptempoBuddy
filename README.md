@@ -20,15 +20,15 @@ Hardware (PCB, schematics, BOM) is the same module.
   - Second tap must follow within 2.5 s after the first one.
   - Subsequent tap times are averaged until tapping finishes.
   - Tapping finishes if the next tap is not performed for 3 periods of the current Speed, but never later than 2.5 s.
-  - A gap between 2 s and 2.5 s still counts as a tap; the period is then clamped to 2 s.
+  - A very slow subsequent taps (gap between 2 s and 2.5 s) still counts; only that interval is clamped to 2 s. Faster taps are left as measured.
 - `Shape` on-off-on switch selects the LFO waveform:
   - Flip **without** holding `Tap Button` — bank 0: Sin, Triangle, Pulse.
   - Flip **while holding** `Tap Button` — bank 1: Ramp up, Ramp down, Random.
   - That `Tap Button` hold is still a tap: first press aligns phase, and past 500 ms it starts Leslie (or cycles the Random algorithm). Release before 500 ms if you only want the other shape. Do not flip `Shape` switch once Leslie is already ramping — the main loop is busy, so it would see the change after Tap goes up, and apply bank 0.
-  - Random algorithm (Hybrid / S&H / Wander) is cycled with a **short tap then a long press** of the `Tap Button` (hold the second press over 500 ms). Works in any shape, takes effect when Random is selected.
-    - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
-    - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
-- Long press from rest (over 500 ms, no short tap before it) is a Leslie ramp:
+- Random algorithm (Hybrid / S&H / Wander) is cycled with a **short tap then a long press** of the `Tap Button` (hold the second press over 500 ms). Works in any shape, takes effect when Random is selected.
+  - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
+  - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
+- Long `Tap Button` press from rest (over 500 ms, no short tap before it) is a Leslie ramp:
   - While held, Speed ramps up to 2x (half period, clamped at 50 ms) and stays there.
   - On release, Speed ramps back to the original period.
   - Press again during the slowdown to speed up again.
@@ -141,6 +141,15 @@ const uint16_t c_tap_end_max = 2500; // max wait for the next tap [ms]; must be 
 
 PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO appears after the RC filter on `OUT`.
 
+### Leslie Speed
+
+Hold Tap (from rest, over 500 ms) ramps to a faster Speed, then ramps back on release.
+
+The multiplier is `c_leslie_speed` in `firmware/src/main.c` - final Speed period on Leslie becomes `period / c_leslie_speed`.
+Default is 2. Use 3 for 3x, and so on — integer only. The fast period is still clamped at `c_lfo_min` (50 ms). 
+
+Speed ramping velocity is the `Speed Pot`, not this constant!
+
 ### Random shape algorithm
 
 Random still follows the tapped or pot Speed, with one new random level per LFO cycle. What it *does* with that level is the algorithm:
@@ -159,11 +168,12 @@ The LED then blinks the new algorithm. The choice is stored in EEPROM, so it sur
 - 3 blinks — Wander
 
 The same blinks happen at power-up, but only if Random shape is already selected (so other shapes do not look like an algorithm change). 
-To always blink on boot, set `ANNOUNCE_RANDOM_ON_BOOT_ALWAYS` to `1` in `firmware/src/main.c`.
+
+To always blink on power-up, set `ANNOUNCE_RANDOM_ON_BOOT_ALWAYS` to `1` in `firmware/src/main.c`.
 
 A blank chip starts in Hybrid. To change that default, edit `LFO_RANDOM_MODE` in the same file. 
 
-The 400 ms Hybrid algorithm split is `c_random_hybrid_ms`.
+The 400 ms Hybrid algorithm split is defined in `c_random_hybrid_ms`.
 
 ## Compiling firmware
 
@@ -191,13 +201,13 @@ I recommend to always disconnect it for programming, using a connector on the `G
 Functional changes (also marked by `MOD:` in the source):
 
 - PWM is an LFO waveform, not a DC delay-time / Speed voltage.
-- "Tempo Division Switch" pin is analog LFO Shape select (on-off-on GND / VCC/2 / VCC; Tap-while-flip for Ramp up, Ramp down, Random; bank in EEPROM) instead of digital Head 2 / Head 4.
+- "Tempo Division Switch" pin is analog LFO "Shape" select instead of digital Head 2 / Head 4.
 - LED always blinks, locked to LFO phase (including pot-control mode).
 - First tap aligns LFO/LED to the downbeat without changing Speed.
 - Tap-session timeout capped at 2.5 s (first-tap window too). Hydra used uncapped 3× tempo and a 1.5 s first-tap window.
 - LFO period range 50-2000 ms instead of Hydra delay 150-920 ms.
 - Long-press is a Leslie ramp (2× Speed while held, ramp back on release; `Speed Pot` sets ramp velocity), not a bounce through the whole delay range.
-- Short tap then long press cycles Random algorithm (Hybrid / S&H / Wander); LED blinks 1-3 times; stored in EEPROM.
+- Short tap then long press cycles Random algorithm (Hybrid / S&H / Wander); LED blinks 1-3 times, stored in EEPROM, announced on power-up if Random shape is selected.
 
 ## License
 
