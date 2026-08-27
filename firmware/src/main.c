@@ -46,7 +46,8 @@
  *   3V3  ----  pulse          /  random
  *
  * Flip without Tap: normal bank. Flip with Tap held: alt bank. Bank is in EEPROM.
- * Hold-flip is not a tap, Leslie, or Random-algorithm change (same as Hydra head bank).
+ * Hold-flip is not a new Speed, Leslie, or Random-algorithm change (same as Hydra head bank).
+ * The Tap press still aligns LFO phase.
  */
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -286,11 +287,11 @@ static uint8_t lfo_wave8(uint16_t phase, uint8_t shape)
     switch (shape)
     {
     case LFO_TRI:
-        if (p & 0x80)
-        {
-            p = ~p;
-        }
-        return (uint8_t)(p << 1);
+    {
+        // fold 0..127 then scale to 0..255 (<<1 only reached 254)
+        uint8_t t = (p & 0x80) ? (uint8_t)~p : p;
+        return (uint8_t)(((uint16_t)t * 255) / 127);
+    }
 
     case LFO_RAMP_UP:
         return p;
@@ -307,19 +308,19 @@ static uint8_t lfo_wave8(uint16_t phase, uint8_t shape)
     default: // LFO_SIN - parabola approximation, no table, no sin()
     {
         uint8_t x = p & 0x7F;
-        uint8_t y = ((uint16_t)x * (128 - x)) >> 5;
-        if (y > 127)
+        uint8_t y = ((uint16_t)x * (128 - x)) >> 5; // 0..128
+        if (phase & 0x8000)
         {
-            y = 127;
+            return (y >= 128) ? 0 : (uint8_t)(128 - y);
         }
-        return (phase & 0x8000) ? (uint8_t)(128 - y) : (uint8_t)(128 + y);
+        return (y >= 128) ? 255 : (uint8_t)(128 + y);
     }
     }
 }
 
 static inline uint16_t wave8_to_pwm(uint8_t w)
 {
-    return ((uint16_t)w * (c_pwm_max + 1u)) >> 8;
+    return (uint16_t)(((uint32_t)w * c_pwm_max) / 255);
 }
 
 // interrupt handler for TCA timer - time counters, LFO sample, PWM output
@@ -558,7 +559,7 @@ int main(void)
     uint8_t first_tap_released = 0; // 1 after a short first tap; next long press cycles random mode
     uint8_t second_down = 0;        // 1 while the press after that short tap is held
     uint16_t pending_interval = 0;  // gap [ms] from first tap to that second press
-    uint8_t shape_selecting = 0;    // 1 if this Tap press flipped the shape switch — not a tap/Leslie/Random cycle
+    uint8_t shape_selecting = 0; // 1 if this Tap press flipped the shape switch — not tempo/Leslie/Random cycle
     uint8_t shape_bank = SHAPE_BANK_NORMAL;
     uint8_t shape_layer = 0;
 
@@ -628,20 +629,23 @@ int main(void)
     while (1)
     {
         snap_adc(&pot_now, &div_now);
+        currentstate = debounce();
 
         // Shape: on-off-on. Flip without Tap = normal bank; flip with Tap held = alt bank.
+        // Use the same debounced Tap as the rest of the loop so a bounce cannot stick shape_selecting.
         {
             uint8_t layer = layer_from_adc(div_now);
             if (layer != shape_layer)
             {
-                uint8_t tap_held = !(PORTA.IN & (1 << TAP_PIN));
+                uint8_t tap_held = currentstate;
                 shape_layer = layer;
                 shape_bank = tap_held ? SHAPE_BANK_ALT : SHAPE_BANK_NORMAL;
                 lfo_shape = shape_from_layer(shape_layer, shape_bank);
                 eeprom_save(tap, mstempo, lfo_random_mode, shape_bank);
                 if (tap_held)
                 {
-                    // this press is only a shape-bank gesture — not a tap, Leslie, or Random cycle
+                    // this press is only a shape-bank gesture — not tempo, Leslie, or Random cycle
+                    // (first-tap phase align is fine; shape is typically flipped between songs)
                     shape_selecting = 1;
                     nbtap = 0;
                     tapping = 0;
@@ -688,11 +692,13 @@ int main(void)
             }
         }
 
-        currentstate = debounce();
-
         // TAP button handling
         if (currentstate == 0 && laststate == 0) // Tap button keeps off
         {
+            if (shape_selecting)
+            {
+                shape_selecting = 0;
+            }
             if (nbtap > 1) // if too long between taps, persist values and resets tapping process
             {
                 // 3 cycles of current tempo, but never more than c_tap_end_max
@@ -706,6 +712,8 @@ int main(void)
                     ms = 0;
                     nbtap = 0;
                     tapping = 0;
+                    first_tap_released = 0;
+                    second_down = 0;
                 }
             }
             else if (nbtap == 1 && read_u16(&ms) > c_tap_end_max) // single tap align only; window must fit c_lfo_max
