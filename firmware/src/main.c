@@ -46,6 +46,7 @@
  *   3V3  ----  pulse          /  random
  *
  * Flip without Tap: normal bank. Flip with Tap held: alt bank. Bank is in EEPROM.
+ * Hold-flip is not a tap, Leslie, or Random-algorithm change (same as Hydra head bank).
  */
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -557,6 +558,7 @@ int main(void)
     uint8_t first_tap_released = 0; // 1 after a short first tap; next long press cycles random mode
     uint8_t second_down = 0;        // 1 while the press after that short tap is held
     uint16_t pending_interval = 0;  // gap [ms] from first tap to that second press
+    uint8_t shape_selecting = 0;    // 1 if this Tap press flipped the shape switch — not a tap/Leslie/Random cycle
     uint8_t shape_bank = SHAPE_BANK_NORMAL;
     uint8_t shape_layer = 0;
 
@@ -628,8 +630,6 @@ int main(void)
         snap_adc(&pot_now, &div_now);
 
         // Shape: on-off-on. Flip without Tap = normal bank; flip with Tap held = alt bank.
-        // Holding Tap for the alt bank also phase-aligns (first press) and starts Leslie
-        // if held ≥500 ms. Flip, then release before 500 ms if you only want the new shape.
         {
             uint8_t layer = layer_from_adc(div_now);
             if (layer != shape_layer)
@@ -639,6 +639,15 @@ int main(void)
                 shape_bank = tap_held ? SHAPE_BANK_ALT : SHAPE_BANK_NORMAL;
                 lfo_shape = shape_from_layer(shape_layer, shape_bank);
                 eeprom_save(tap, mstempo, lfo_random_mode, shape_bank);
+                if (tap_held)
+                {
+                    // this press is only a shape-bank gesture — not a tap, Leslie, or Random cycle
+                    shape_selecting = 1;
+                    nbtap = 0;
+                    tapping = 0;
+                    first_tap_released = 0;
+                    second_down = 0;
+                }
             }
         }
 
@@ -712,7 +721,16 @@ int main(void)
         {
             laststate = 0;
             previouspot = pot_now;
-            if (nbtap == 1 && !first_tap_released && !second_down && read_u16(&ms) < 500)
+            if (shape_selecting)
+            {
+                shape_selecting = 0;
+                nbtap = 0;
+                tapping = 0;
+                ms = 0;
+                first_tap_released = 0;
+                second_down = 0;
+            }
+            else if (nbtap == 1 && !first_tap_released && !second_down && read_u16(&ms) < 500)
             {
                 first_tap_released = 1; // short first tap done; a following long press will cycle random mode
             }
@@ -776,7 +794,11 @@ int main(void)
         }
         else if (currentstate == 1 && laststate == 1) // Tap button keeps on
         {
-            if (read_u16(&ms) >= 500)
+            if (shape_selecting)
+            {
+                // Hold-flip already consumed this press; wait for release
+            }
+            else if (read_u16(&ms) >= 500)
             {
                 if (second_down)
                 {

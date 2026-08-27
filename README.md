@@ -24,7 +24,7 @@ This is an adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAl
 - `Shape` on-off-on switch selects the LFO waveform:
   - Flip **without** holding `Tap Button` — bank 0: Sin, Triangle, Pulse.
   - Flip **while holding** `Tap Button` — bank 1: Ramp up, Ramp down, Random.
-  - That `Tap Button` hold is still a tap: first press aligns phase, and past 500 ms it starts Leslie (or cycles the Random algorithm). Release before 500 ms if you only want the other shape. Do not flip `Shape` switch once Leslie is already ramping — the main loop is busy, so it would see the change after Tap goes up, and apply bank 0.
+  - That hold-flip is not a new Speed, not Leslie, and not a Random algorithm change. Release and flip again without holding to get back to bank 0. Do not flip `Shape` once Leslie is already ramping — the main loop is busy, so it would see the change after Tap goes up, and apply bank 0.
 - Random shape algorithm (Hybrid / S&H / Wander) is cycled with a **short tap then one long press** of the `Tap Button` (hold the second press over 500 ms). Works in any shape, takes effect when Random is selected.
   - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
   - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
