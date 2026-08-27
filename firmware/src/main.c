@@ -82,6 +82,8 @@
 // 0 = announce Random hybrid/S&H/wander on power-up only if that shape is selected
 // 1 = always announce on power-up (any shape)
 #define ANNOUNCE_RANDOM_ON_BOOT_ALWAYS 0
+// Trailing dark after 1/2/3 announce blinks. Literal in announce_random_mode — _delay_ms needs a compile-time constant.
+#define C_RANDOM_ANNOUNCE_DARK_MS 700
 
 #define SHAPE_BANK_NORMAL 0 // sin / triangle / pulse
 #define SHAPE_BANK_ALT 1    // ramp up / ramp down / random
@@ -454,7 +456,7 @@ void announce_random_mode(uint8_t mode)
     {
         blink();
     }
-    _delay_ms(250);
+    _delay_ms(C_RANDOM_ANNOUNCE_DARK_MS);
     led_follow_lfo = 1;
 }
 

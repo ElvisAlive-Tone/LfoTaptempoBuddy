@@ -167,6 +167,12 @@ A blank chip starts in Hybrid. To change that default, edit `LFO_RANDOM_MODE` in
 
 The 400 ms Hybrid algorithm split is defined in `c_random_hybrid_ms`.
 
+After the 1/2/3 announcement blinks there is a trailing dark so they do not blend into the LFO tempo LED:
+
+```c
+#define C_RANDOM_ANNOUNCE_DARK_MS 700     // dark after algorithm blinks so they don't blend into tempo LED
+```
+
 ## Compiling firmware
 
 I'm using VS Code with Platform IO extension. You have to have `Atmel megaAVR` Platform installed in the Platform IO.
