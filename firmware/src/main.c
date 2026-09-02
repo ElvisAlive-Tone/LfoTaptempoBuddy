@@ -29,7 +29,7 @@
  *   LED blinks 1-3 times to show the mode; stored in EEPROM
  *
  * Pinout:
- * 1: VDD
+ * 1: VDD/VCC
  * 2: Momentary Tap Tempo Button Digital Input
  * 3: LED+ Output
  * 4: Speed Potentiometer Analog Input
@@ -43,7 +43,7 @@
  *
  *   GND  ----  sin            /  ramp up    (hold Tap while flipping)
  *   1/2  ----  triangle       /  ramp down
- *   3V3  ----  pulse          /  random
+ *   VCC  ----  pulse          /  random
  *
  * Flip without Tap: normal bank. Flip with Tap held: alt bank. Bank is in EEPROM.
  * Hold-flip is not a new Speed, Leslie, or Random-algorithm change (same as Hydra head bank).
@@ -559,7 +559,7 @@ int main(void)
     uint8_t first_tap_released = 0; // 1 after a short first tap; next long press cycles random mode
     uint8_t second_down = 0;        // 1 while the press after that short tap is held
     uint16_t pending_interval = 0;  // gap [ms] from first tap to that second press
-    uint8_t shape_selecting = 0; // 1 if this Tap press flipped the shape switch — not tempo/Leslie/Random cycle
+    uint8_t shape_selecting = 0;    // 1 if this Tap press flipped the shape switch — not tempo/Leslie/Random cycle
     uint8_t shape_bank = SHAPE_BANK_NORMAL;
     uint8_t shape_layer = 0;
 

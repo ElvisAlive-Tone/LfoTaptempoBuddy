@@ -60,17 +60,17 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
 - Power and output:
   - `GND` - ground
   - `OUT` - LFO voltage
-  - `3V3` - 3.3 V power
-  - Use a connector to make it easy to disconnect for programming.
+  - `VCC` - 5V power, but can run on 3.3V also
+  - You can use a connector to disconnect module easily for programming, spacing on PCB is 2.54mm for it.
 - `Speed Pot` - connect pot's 1, 2 and 3 lugs to the module's `P1`, `P2` and `P3`.
   Use `B` type pot, from `B10k` up to `B100k`. Higher voltage is higher LFO Speed (shorter LFO period).
 - `Tap Button` - connect momentary button to the module's `TAP` pads.
 - `LED` - connect LED to the module's `L+` and `L-`. Use `TL` trimmer to set LED's brightness. Used `2k` value should
   be OK for the most LED types, if too small for your LED, use higher trimmer value, or connect additional resistor
   in series. Alternatively use fixed value resistor `RL` if you figured out exact value and wanna to save some space.
-- `Shape` switch - SPDT **on-off-on**. Common to `SH`. Throws to `SHG` and `SH3`. Left of `/` is the normal bank (no hold), right is the alt bank (hold Tap).
+- `Shape` switch - SPDT **on-off-on**. Common to `SH`. Throws to `SHG` and `SHV`. Left of `/` is the normal bank (no hold), right is the alt bank (hold Tap).
   ```
-    SH3 ---- throw     Pulse    /  Random
+    SHV ---- throw     Pulse    /  Random
                 |
     SH  ---- common    Triangle /  Ramp down
                 |
@@ -80,8 +80,9 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
 ### LFO voltage `OUT` wiring
 
 Analog `OUT` is the LFO control voltage PWM:
-- PCB contains simple filter to smooth it out. Cut frequency should be 100–200Hz, so eg. R=10kohm and C=100nF is good into high-Z load. So buffer it, or adjust filter for small-Z loads.
-- Maximal amplitude is 3.3V, so scaling may be necessary.
+
+- PCB contains simple filter to smooth it out. Cut frequency should be 100–200Hz, so eg. R=1kohm and C=1uF is good into high-Z load. So buffer it, or adjust filter for small-Z loads.
+- Maximal amplitude is VCC (5V or 3.3V), so scaling may be necessary fo rnext circuitry
 - You have to implement LFO `Depth` pot if you want it.
 
 Exact circuitry consuming this module output depends on how do you want to drive the rest of the pedal circuit - VACTROL LED/s, lamp, JFETs etc.
@@ -90,40 +91,33 @@ Exact circuitry consuming this module output depends on how do you want to drive
 
 Module schematics:
 
-**TODO** image <img src="img/schematics.png" width="600px" alt="Module schematics">
-
-Necessary changes from Hydra Delay Taptempo Buddy:
-
-- `Shape` switch - 2x R 10k (R5, R6) from common to GND and 3V3
-- PWM `OUT` filter values update?
+<img src="img/schematics.png" width="600px" alt="Module schematics">
 
 PCB BOM:
-
-**TODO** update for new schematic and PCB
 
 | Markings           | Value             | PCB packaging type                                    |
 | ------------------ | ----------------- | ----------------------------------------------------- |
 | R1, R2             | 1k                | 1206                                                  |
 | R4, R5, R6         | 10k               | 1206                                                  |
 | C1, C3, C4         | 100n              | 1206                                                  |
-| C2                 | 10u               | 5,3mm                                                 |
-| TL                 | 2k                | 3362 trimmer                                          |
+| C2                 | 1u                | 5mm                                                   |
+| TL                 | 2k or 5k          | 3362 trimmer                                          |
 | RL (instead of TL) | matching LED      | 1206                                                  |
 | U1                 | ATtiny 402 or 412 | SOIC-8                                                |
 | UPDI               |                   | 3 pins header connector (male or female, it's on you) |
 
 External components:
 
-| Markings     | Value                                      |
-| ------------ | ------------------------------------------ |
-| `Speed Pot`  | B10k - B100k                               |
-| LED          | any color and size LED                     |
-| `Tap Button` | any momentary switch                       |
-| `Shape`      | SPDT on-off-on                             |
+| Markings     | Value                  |
+| ------------ | ---------------------- |
+| `Speed Pot`  | B10k - B100k           |
+| LED          | any color and size LED |
+| `Tap Button` | any momentary switch   |
+| `Shape`      | SPDT on-off-on         |
 
-PCB: 
+PCB:
 
-**TODO** image <img src="img/pcb.png" width="300px" alt="PCB">
+<img src="img/pcb.png" width="300px" alt="PCB">
 
 ## Functionality Tweaking
 
@@ -145,19 +139,19 @@ PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO appears after 
 Holding `Tap button` (from rest, over 500 ms) ramps to a faster Speed, then ramps back on release.
 
 The multiplier is `c_leslie_speed` in `firmware/src/main.c` - final Speed period becomes `period / c_leslie_speed`.
-Default is 2. Use 3 for 3x, and so on — integer only. The fast period is still clamped at `c_lfo_min` (50 ms). 
+Default is 2. Use 3 for 3x, and so on — integer only. The fast period is still clamped at `c_lfo_min` (50 ms).
 
 Speed ramping velocity is derived from the `Speed Pot`, not this constant!
 
 ### Random shape algorithm
 
-Random still follows the tapped or pot Speed, with one new random level per LFO cycle. What it *does* with that level is the algorithm:
+Random still follows the tapped or pot Speed, with one new random level per LFO cycle. What it _does_ with that level is the algorithm:
 
 - **Hybrid** — S&H when period is 400 ms or shorter, Wander when LFO is slower (default).
 - **S&H** — jumps to a random level and sits there until the next cycle (classic stepped random).
 - **Wander** — glides smoothly from the last level to the next over the cycle (no stairs; nicer when the LFO is slow).
 
-**How to switch:** tap once (short), then press and hold (longer than 500 ms). That is not a new Speed, and it is not Leslie. 
+**How to switch:** tap once (short), then press and hold (longer than 500 ms). That is not a new Speed, and it is not Leslie.
 You can do this tap pattern with any shape selected. The sound only changes when Random is selected; the LED still blinks the new algorithm on any shape.
 
 The LED then blinks the new algorithm. The choice is stored in EEPROM, so it survives power-off:
@@ -166,11 +160,11 @@ The LED then blinks the new algorithm. The choice is stored in EEPROM, so it sur
 - 2 blinks — S&H
 - 3 blinks — Wander
 
-The same blinks happen at power-up, but only if Random shape is already selected (so other shapes do not look like an algorithm change). 
+The same blinks happen at power-up, but only if Random shape is already selected (so other shapes do not look like an algorithm change).
 
 To always blink on power-up, set `ANNOUNCE_RANDOM_ON_BOOT_ALWAYS` to `1` in `firmware/src/main.c`.
 
-A blank chip starts in Hybrid. To change that default, edit `LFO_RANDOM_MODE` in the same file. 
+A blank chip starts in Hybrid. To change that default, edit `LFO_RANDOM_MODE` in the same file.
 
 The 400 ms Hybrid algorithm split is defined in `c_random_hybrid_ms` (400 ms and faster -> S&H in Hybrid).
 
@@ -196,24 +190,24 @@ Easiest way is to set the microcontroller up before soldering it to the PCB.
 
 If you want to change firmware later, you can use UPDI pins on the module, where `GND` is middle, `UPDI` left, `VCC` right.
 
-Be careful, **never program it with 5V VCC when the module is connected to a 3.3V pedal**
-(Hydra / FV-1 and similar) - you can damage the DSP or other chips.
+Be careful, **never program it with 5V VCC when the module is connected to a 3.3V chip like FV-1 DCP** - you can damage the DSP or other chips.
 
-I recommend to always disconnect it for programming, using a connector on the `GND` / `OUT` / `3V3` connection.
+I recommend to always disconnect it for programming, using a connector on the `GND` / `OUT` / `VCC` connection.
 
 ## Changelog
 
 Revision string of each version is baked into firmware binary.
 
-* v1.0 - `rev_1` - work in progress
+- v1.0 - `rev_1` - work in progress
   - initial release
 
 ## Changes from Hydra Delay Taptempo Buddy
 
 Functional changes (also marked by `MOD:` in the source):
 
+- runs at 5V power supply by default, not 3.3V
 - PWM is an LFO waveform, not a DC delay-time / Speed voltage.
-- Hydra's "Tempo Division Switch" (`DIV`) is analog LFO Shape on pads `SH` / `SHG` / `SH3` instead of digital Head 2 / Head 4.
+- Hydra's digital "Tempo Division Switch" (`DIV`) changed to 3 state analog LFO Shape on pads `SH` / `SHG` / `SHV`.
 - LED always blinks, locked to LFO phase (including pot-control mode).
 - First tap aligns LFO/LED to the downbeat without changing Speed.
 - Tap-session timeout capped at 2.5 s (first-tap window too). Hydra used uncapped 3× tempo and a 1.5 s first-tap window.
