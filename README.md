@@ -93,6 +93,8 @@ Module schematics:
 
 <img src="img/schematics.png" width="600px" alt="Module schematics">
 
+**Note:** you can omit U2 and bridge its pins 1 to 3 if you have 5V or 3.3V from the main pedal board.
+
 PCB BOM:
 
 | Markings           | Value             | PCB packaging type                                    |
@@ -104,6 +106,7 @@ PCB BOM:
 | TL                 | 2k or 5k          | 3362 trimmer                                          |
 | RL (instead of TL) | matching LED      | 1206                                                  |
 | U1                 | ATtiny 402 or 412 | SOIC-8                                                |
+| U2                 | 7805              | TO-92                                                 |
 | UPDI               |                   | 3 pins header connector (male or female, it's on you) |
 
 External components:
