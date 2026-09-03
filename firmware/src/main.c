@@ -19,13 +19,17 @@
  * - "Tempo Division Switch" pin is analog LFO shape select: on-off-on
  *   (GND / VCC/2 / VCC) for sin, triangle, pulse; hold Tap while flipping
  *   for ramp up, ramp down, random. Bank stored in EEPROM.
- * - LED always blinks, locked to LFO phase (including pot-control mode)
- * - First tap aligns LFO/LED to the downbeat without changing rate
+ * - LED blinks at LFO speed, 50% duty locked to phase (including pot-control mode); Random announce uses blocking blinks
+ * - First tap aligns LFO/LED to the downbeat without changing rate; Leslie/unlatch
+ *   long hold undoes that sync when the ramp starts (no phase jump on speed glide)
  * - Tap-session timeout capped at c_tap_end_max (first-tap window too)
  * - LFO period range 50-2000 ms instead of Hydra delay 150-920 ms
- * - Long-press is a Leslie ramp (2x faster while held, or 2x slower if already
- *   fast; ramp back on release; Speed pot sets ramp velocity), not a bounce
- *   through the whole delay range
+ * - Long-press is a latching Leslie ramp (2x faster while held, or 2x slower if
+ *   already fast; release at target to stay; long-hold from rest ramps home;
+ *   Speed pot sets ramp velocity only while held), not a bounce through the
+ *   whole delay range
+ * - Speed pot uses a log map (more travel in ~200-800 ms); catch-up takeover
+ *   from tap or latched Leslie when pot-mapped period matches the sounding rate
  * - Short tap then long press cycles Random algorithm (hybrid / S&H / wander);
  *   LED blinks 1-3 times to show the mode; stored in EEPROM
  *
@@ -108,6 +112,11 @@ const uint16_t c_random_hybrid_ms = 400;
 const uint8_t c_leslie_speed = 2;
 // Leslie: if current period [ms] is below this, hold slows (× multiplier) instead of speeds (/ multiplier).
 const uint16_t c_leslie_slowdown_ms = 300;
+// Leslie ramp: total glide time [ms] from Speed pot (higher pot = faster). Quadratic taper on slow end.
+const uint16_t c_leslie_ramp_min_ms = 300;  // Speed pot max — ~0.3 s full 2×/½ glide
+const uint16_t c_leslie_ramp_max_ms = 8000; // Speed pot min — ~8 s full glide
+// Pot catch-up: take over tap/Leslie when pot-mapped period is within this window [ms]
+const uint16_t c_pot_catchup_ms = 40;
 
 // On-off-on shape switch: midpoints between 0, ~512, 1023
 const uint16_t c_shape_mid_lo = 256;
@@ -153,6 +162,7 @@ void IO_Init(void)
 {
     // PWM & LED as outputs
     PORTA.DIRSET = (1 << PWM_PIN) | (1 << LED_PIN);
+    PORTA.OUTCLR = (1 << LED_PIN);
     // pull up for tap button only
     PORTA_PIN6CTRL |= PORT_PULLUPEN_bm; // Tap tempo button
     PORTA_PIN2CTRL = PORT_ISC_INPUT_DISABLE_gc;
@@ -294,7 +304,29 @@ static uint8_t lfo_random(uint16_t phase)
     return random_snh();
 }
 
-// 8-bit waveform from 16-bit phase. Simple integer math, parabola sine, LFSR random.
+// 128-byte sine LUT: p=0..127 samples; p=128..255 mirrored (256 - lut[p&0x7F])
+static const uint8_t sin_lut[128] = {
+    128, 131, 134, 137, 140, 144, 147, 150, 153, 156, 159, 162, 165, 168, 171, 174,
+    177, 179, 182, 185, 188, 191, 193, 196, 199, 201, 204, 206, 209, 211, 213, 216,
+    218, 220, 222, 224, 226, 228, 230, 232, 234, 235, 237, 239, 240, 241, 243, 244,
+    245, 246, 248, 249, 250, 250, 251, 252, 253, 253, 254, 254, 254, 255, 255, 255,
+    255, 255, 255, 255, 254, 254, 254, 253, 253, 252, 251, 250, 250, 249, 248, 246,
+    245, 244, 243, 241, 240, 239, 237, 235, 234, 232, 230, 228, 226, 224, 222, 220,
+    218, 216, 213, 211, 209, 206, 204, 201, 199, 196, 193, 191, 188, 185, 182, 179,
+    177, 174, 171, 168, 165, 162, 159, 156, 153, 150, 147, 144, 140, 137, 134, 131};
+
+static inline uint8_t lfo_sin_wave(uint16_t phase)
+{
+    uint8_t p = phase >> 8;
+    uint8_t i = p & 0x7F;
+    if (p < 128)
+    {
+        return sin_lut[i];
+    }
+    return (uint8_t)(256 - sin_lut[i]);
+}
+
+// 8-bit waveform from 16-bit phase. Sin uses 128-byte LUT; integer math for the rest.
 static uint8_t lfo_wave8(uint16_t phase, uint8_t shape)
 {
     uint8_t p = phase >> 8;
@@ -320,16 +352,8 @@ static uint8_t lfo_wave8(uint16_t phase, uint8_t shape)
     case LFO_RANDOM:
         return lfo_random(phase);
 
-    default: // LFO_SIN - parabola approximation, no table, no sin()
-    {
-        uint8_t x = p & 0x7F;
-        uint8_t y = ((uint16_t)x * (128 - x)) >> 5; // 0..128
-        if (phase & 0x8000)
-        {
-            return (y >= 128) ? 0 : (uint8_t)(128 - y);
-        }
-        return (y >= 128) ? 255 : (uint8_t)(128 + y);
-    }
+    default: // LFO_SIN — 128-byte flash LUT
+        return lfo_sin_wave(phase);
     }
 }
 
@@ -359,7 +383,6 @@ ISR(TCA0_OVF_vect)
 
         if (led_follow_lfo)
         {
-            // MOD: LED follows LFO phase for pot and tap (Hydra was solid-on in pot mode)
             if (lfo_phase & 0x8000)
             {
                 PORTA.OUTCLR = (1 << LED_PIN);
@@ -505,10 +528,89 @@ void eeprom_save(uint8_t tap_val, uint16_t tempo_val, uint8_t rnd_mode, uint8_t 
     eeprom_persist();
 }
 
+// Log map: period = c_lfo_max * (c_lfo_min/c_lfo_max)^(p/POT_MAX) — more pot travel ~200-800 ms
+static const uint16_t period_log_lut[65] = {
+    2000, 1888, 1782, 1682, 1588, 1499, 1415, 1336, 1261, 1191, 1124, 1061, 1001, 945, 892, 842,
+    795, 751, 709, 669, 632, 596, 563, 531, 501, 473, 447, 422, 398, 376, 355, 335, 316, 299, 282,
+    266, 251, 237, 224, 211, 199, 188, 178, 168, 158, 149, 141, 133, 126, 119, 112, 106, 100, 94,
+    89, 84, 79, 75, 71, 67, 63, 59, 56, 53, 50};
+
 // MOD: Speed pot to LFO period [ms] - higher pot = faster LFO = shorter period
 uint16_t pot_to_period(uint16_t p)
 {
-    return (uint16_t)(c_lfo_max - ((uint32_t)p * c_lfo_range) / POT_MAX_VALUE);
+    uint8_t idx = (uint8_t)(((uint32_t)p * 64UL + (POT_MAX_VALUE / 2)) / POT_MAX_VALUE);
+    if (idx > 64)
+    {
+        idx = 64;
+    }
+    return period_log_lut[idx];
+}
+
+static uint8_t periods_near(uint16_t sounding, uint16_t pot_period)
+{
+    uint16_t d = (sounding > pot_period) ? (sounding - pot_period) : (pot_period - sounding);
+    uint16_t w = sounding / 20;
+    if (w < c_pot_catchup_ms)
+    {
+        w = c_pot_catchup_ms;
+    }
+    return d <= w;
+}
+
+static uint16_t leslie_target_from(uint16_t origin)
+{
+    if (origin < c_leslie_slowdown_ms)
+    {
+        uint32_t slow = (uint32_t)origin * c_leslie_speed;
+        if (slow > c_lfo_max)
+        {
+            return c_lfo_max;
+        }
+        return (uint16_t)slow;
+    }
+    uint16_t fast = origin / c_leslie_speed;
+    if (fast < c_lfo_min)
+    {
+        return c_lfo_min;
+    }
+    return fast;
+}
+
+// Total Leslie glide duration from Speed pot (higher pot = shorter ramp).
+static uint16_t leslie_ramp_total_ms(uint16_t pot_val)
+{
+    uint32_t inv = POT_MAX_VALUE - pot_val;
+    uint32_t t = (inv * inv) / POT_MAX_VALUE;
+    return (uint16_t)(c_leslie_ramp_min_ms +
+                      (t * (uint32_t)(c_leslie_ramp_max_ms - c_leslie_ramp_min_ms)) / POT_MAX_VALUE);
+}
+
+static uint16_t period_delta(uint16_t a, uint16_t b)
+{
+    return (a > b) ? (a - b) : (b - a);
+}
+
+// Wait one 1 ms period step; `leg_span` is |start − goal| for this ramp leg (constant rate).
+static void leslie_ramp_step_wait(uint16_t pot_val, uint16_t leg_span)
+{
+    if (leg_span < 1)
+    {
+        leg_span = 1;
+    }
+    uint32_t us = ((uint32_t)leslie_ramp_total_ms(pot_val) * 1000UL) / leg_span;
+    if (us < 200)
+    {
+        us = 200;
+    }
+    while (us >= 1000)
+    {
+        _delay_ms(1);
+        us -= 1000;
+    }
+    while (us--)
+    {
+        _delay_us(1);
+    }
 }
 
 // MOD: phase increment so one wrap happens in `period_ms` milliseconds (1 kHz tick)
@@ -542,6 +644,13 @@ void set_lfo_period(uint16_t period_ms, uint8_t restart)
 void lfo_restart_phase(void)
 {
     write_u16(&lfo_phase, 0);
+}
+
+// Leslie/unlatch long hold: undo foot-down sync — restore phase as if sync never happened
+static void lfo_undo_press_sync(uint16_t phase_saved, uint16_t elapsed_ms)
+{
+    uint16_t inc = read_u16(&lfo_inc);
+    write_u16(&lfo_phase, phase_saved + (uint16_t)((uint32_t)inc * elapsed_ms));
 }
 
 // MOD: keep LFO period in c_lfo_min .. c_lfo_max
@@ -582,6 +691,10 @@ int main(void)
     uint8_t shape_selecting = 0;    // 1 if this Tap press flipped the shape switch — not tempo/Leslie/Random cycle
     uint8_t shape_bank = SHAPE_BANK_NORMAL;
     uint8_t shape_layer = 0;
+    uint8_t leslie_latched = 0;     // 1 while sitting at Leslie 2x/½ after release
+    uint16_t leslie_origin = 0;     // saved non-Leslie period for unlatch / next Leslie origin
+    uint8_t leslie_phase_undo = 0;  // 1 after foot-down sync; cleared on short tap, undone on Leslie entry
+    uint16_t phase_on_press = 0;    // LFO phase saved before foot-down sync (for Leslie undo)
 
     // read values from EEPROM
     while (NVMCTRL.STATUS & NVMCTRL_EEBUSY_bm) // Wait for EEPROM not busy.
@@ -611,6 +724,7 @@ int main(void)
     // enable interrupts
     sei();
     IO_Init();
+    led_follow_lfo = 0; // keep LED off until boot announce (if any) finishes
     TCA_Config();
     ADC_Config();
 
@@ -644,6 +758,10 @@ int main(void)
     {
         announce_random_mode(lfo_random_mode);
     }
+    else
+    {
+        led_follow_lfo = 1;
+    }
 
     // Main loop
     while (1)
@@ -676,20 +794,32 @@ int main(void)
         }
 
         // TIME POT handling
-        // if pot move of more than 5%, changing to pot control
-        if ((tap == 1 && tapping == 0 && adc_delta(previouspot, pot_now) >= 50) || (tap == 0 && tapping == 0 && adc_delta(previouspot, pot_now) >= 10))
+        if (tapping == 0)
         {
-            divtempo = pot_to_period(pot_now);
-            set_lfo_period(divtempo, 0);
-            previouspot = pot_now;
-            // delay EEPROM change due to power-off pot value changes
-            if (tap == 1)
+            uint16_t pot_period = pot_to_period(pot_now);
+            if (tap == 0 && !leslie_latched)
             {
-                // set flag and reset ms counter for delayed EEPROM write
-                eeprom_reset_tap = 1;
-                ms = 0;
+                if (pot_period != divtempo)
+                {
+                    divtempo = pot_period;
+                    set_lfo_period(divtempo, 0);
+                }
+                previouspot = pot_now;
             }
-            tap = 0;
+            else if ((tap == 1 || leslie_latched) && periods_near(divtempo, pot_period) &&
+                     adc_delta(previouspot, pot_now) >= 10)
+            {
+                divtempo = pot_period;
+                set_lfo_period(divtempo, 0);
+                previouspot = pot_now;
+                leslie_latched = 0;
+                if (tap == 1)
+                {
+                    eeprom_reset_tap = 1;
+                    ms = 0;
+                }
+                tap = 0;
+            }
         }
 
         // handle delayed `tap` reset in EEPROM due to potentional power-off Pot value changes
@@ -729,6 +859,7 @@ int main(void)
 
                     // reset state machine
                     tap = 1;
+                    leslie_latched = 0;
                     previouspot = pot_now;
                     ms = 0;
                     nbtap = 0;
@@ -750,6 +881,7 @@ int main(void)
         {
             laststate = 0;
             previouspot = pot_now;
+            leslie_phase_undo = 0; // short tap / release before Leslie — keep foot-down sync
             if (shape_selecting)
             {
                 shape_selecting = 0;
@@ -772,6 +904,7 @@ int main(void)
                 set_lfo_period(divtempo, 1);
                 nbtap = 2;
                 tap = 1;
+                leslie_latched = 0;
                 previouspot = pot_now;
                 ms = 0;
                 second_down = 0;
@@ -782,6 +915,8 @@ int main(void)
         {
             if (nbtap == 0) // MOD: first tap aligns to downbeat, keep current rate
             {
+                phase_on_press = read_u16(&lfo_phase);
+                leslie_phase_undo = 1;
                 ms = 0;
                 nbtap++;
                 laststate = 1;
@@ -854,67 +989,130 @@ int main(void)
                 else
                 {
                     // Hold: ramp by c_leslie_speed. Below c_leslie_slowdown_ms → slower (×);
-                    // otherwise faster (/). Release: ramp back to the original period.
-                    // Speed pot sets how fast that change happens (higher = faster ramp).
-                    uint16_t ramp_origin = divtempo;
-                    uint16_t ramp_target;
-                    if (ramp_origin < c_leslie_slowdown_ms)
+                    // otherwise faster (/). Release at target to latch; long-hold while latched
+                    // ramps home. Speed pot sets ramp velocity only while held.
+                    uint8_t unlatch = leslie_latched;
+                    uint8_t clear_latch_at_origin = unlatch;
+                    uint16_t saved_origin;
+                    uint16_t leslie_target;
+                    uint8_t toward_leslie;
+                    uint8_t return_while_held = unlatch;
+                    uint16_t ramp_leg_span;
+
+                    if (unlatch)
                     {
-                        uint32_t slow = (uint32_t)ramp_origin * c_leslie_speed;
-                        if (slow > c_lfo_max)
-                        {
-                            ramp_target = c_lfo_max;
-                        }
-                        else
-                        {
-                            ramp_target = (uint16_t)slow;
-                        }
+                        saved_origin = leslie_origin;
+                        leslie_target = leslie_target_from(saved_origin);
+                        toward_leslie = 0;
+                        ramp_leg_span = period_delta(divtempo, saved_origin);
                     }
                     else
                     {
-                        ramp_target = ramp_origin / c_leslie_speed;
-                        if (ramp_target < c_lfo_min)
-                        {
-                            ramp_target = c_lfo_min;
-                        }
+                        saved_origin = divtempo;
+                        leslie_target = leslie_target_from(saved_origin);
+                        toward_leslie = 1;
+                        ramp_leg_span = period_delta(saved_origin, leslie_target);
                     }
-                    uint8_t to_target = 1;
+                    if (ramp_leg_span < 1)
+                    {
+                        ramp_leg_span = 1;
+                    }
+
+                    if (leslie_phase_undo)
+                    {
+                        lfo_undo_press_sync(phase_on_press, read_u16(&ms));
+                        leslie_phase_undo = 0;
+                    }
 
                     for (;;)
                     {
                         uint8_t held = !(PORTA.IN & (1 << TAP_PIN));
-                        if (to_target)
-                        {
-                            if (!held)
-                            {
-                                to_target = 0; // released - start returning
-                            }
-                            else if (divtempo < ramp_target)
-                            {
-                                divtempo++;
-                            }
-                            else if (divtempo > ramp_target)
-                            {
-                                divtempo--;
-                            }
-                        }
-                        else
+
+                        if (toward_leslie)
                         {
                             if (held)
                             {
-                                to_target = 1; // pressed again during return
+                                if (divtempo < leslie_target)
+                                {
+                                    divtempo++;
+                                }
+                                else if (divtempo > leslie_target)
+                                {
+                                    divtempo--;
+                                }
                             }
-                            else if (divtempo < ramp_origin)
+                            else if (divtempo == leslie_target)
+                            {
+                                leslie_latched = 1;
+                                leslie_origin = saved_origin;
+                                break;
+                            }
+                            else
+                            {
+                                toward_leslie = 0;
+                                ramp_leg_span = period_delta(divtempo, saved_origin);
+                                if (ramp_leg_span < 1)
+                                {
+                                    ramp_leg_span = 1;
+                                }
+                            }
+                        }
+
+                        if (!toward_leslie)
+                        {
+                            if (return_while_held)
+                            {
+                                if (held)
+                                {
+                                    if (divtempo < saved_origin)
+                                    {
+                                        divtempo++;
+                                    }
+                                    else if (divtempo > saved_origin)
+                                    {
+                                        divtempo--;
+                                    }
+                                }
+                                else
+                                {
+                                    if (divtempo == saved_origin)
+                                    {
+                                        leslie_latched = 0;
+                                        break;
+                                    }
+                                    // Released before origin — keep ramping home (foot up), like pre-latch return
+                                    return_while_held = 0;
+                                    ramp_leg_span = period_delta(divtempo, saved_origin);
+                                    if (ramp_leg_span < 1)
+                                    {
+                                        ramp_leg_span = 1;
+                                    }
+                                }
+                            }
+                            else if (held)
+                            {
+                                toward_leslie = 1;
+                                ramp_leg_span = period_delta(divtempo, leslie_target);
+                                if (ramp_leg_span < 1)
+                                {
+                                    ramp_leg_span = 1;
+                                }
+                            }
+                            else if (divtempo < saved_origin)
                             {
                                 divtempo++;
                             }
-                            else if (divtempo > ramp_origin)
+                            else if (divtempo > saved_origin)
                             {
                                 divtempo--;
                             }
                             else
                             {
-                                break; // back at original rate, button up
+                                if (clear_latch_at_origin)
+                                {
+                                    leslie_latched = 0;
+                                }
+                                break;
                             }
                         }
 
@@ -922,11 +1120,7 @@ int main(void)
 
                         snap_adc(&pot_now, &div_now);
 
-                        // higher Speed pot = faster ramping (shorter wait per 1 ms period step)
-                        for (uint16_t i = 0; i < ((POT_MAX_VALUE - pot_now) * 2); i++)
-                        {
-                            _delay_us(1);
-                        }
+                        leslie_ramp_step_wait(pot_now, ramp_leg_span);
                     }
                     previouspot = pot_now;
                     // Leslie ate this press — do not treat it as a tap session
