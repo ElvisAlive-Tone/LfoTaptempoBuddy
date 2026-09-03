@@ -2,7 +2,7 @@
 
 Small but powerful ATtiny402 based tap-tempo LFO firmware. Output is a waveform (Sin, Triangle, Pulse, Ramp up,
 Ramp down, Random) at the Speed set by the `Speed Pot` or by tapping. Multiple Random algorithms.
-Leslie like speed-up on long tap. Intended for tremolo and similar analog modulation effects.
+Leslie like speed change on long tap (faster, or slower when already fast). Intended for tremolo and similar analog modulation effects.
 
 **This code has not been tested yet!**
 
@@ -36,9 +36,9 @@ This is an adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAl
   - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
   - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
 - Leslie ramp effect - long `Tap Button` press from rest (over 500 ms, no short tap before it):
-  - While held, Speed ramps up to 2x (half period, clamped at 50 ms) and stays there.
+  - While held, Speed ramps by 2×: faster (half period, clamped at 50 ms) if the current period is 300 ms or longer; slower (double period, clamped at 2000 ms) if already under 300 ms.
   - On release, Speed ramps back to the original period.
-  - Press again during the slowdown to speed up again.
+  - Press again during the return to go back toward the Leslie target.
   - Ramping velocity depends on `Speed Pot` (higher = faster ramp).
 - Current `Speed Pot`/`Tap Button` control state, tapped-in Speed, Random algorithm, and shape bank are preserved over power-off.
 - Trimmer or fixed resistor to set LED brightness.
@@ -139,12 +139,16 @@ PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO appears after 
 
 ### Leslie Speed
 
-Holding `Tap button` (from rest, over 500 ms) ramps to a faster Speed, then ramps back on release.
+Holding `Tap button` (from rest, over 500 ms) ramps Speed by a multiplier, then ramps back on release.
 
-The multiplier is `c_leslie_speed` in `firmware/src/main.c` - final Speed period becomes `period / c_leslie_speed`.
-Default is 2. Use 3 for 3x, and so on — integer only. The fast period is still clamped at `c_lfo_min` (50 ms).
+The multiplier is `c_leslie_speed` in `firmware/src/main.c`. Default is 2. Use 3 for 3x, and so on — integer only.
 
-Speed ramping velocity is derived from the `Speed Pot`, not this constant!
+- If the current period is **at or above** `c_leslie_slowdown_ms`, hold speeds up: period becomes `period / c_leslie_speed`, clamped at `c_lfo_min` (50 ms).
+- If the current period is **below** `c_leslie_slowdown_ms` (already high Speed), hold slows down: period becomes `period * c_leslie_speed`, clamped at `c_lfo_max` (2000 ms).
+
+`c_leslie_slowdown_ms` defaults to 300 (~3.3 Hz).
+
+Speed ramping velocity is derived from the `Speed Pot`, not these constants!
 
 ### Random shape algorithm
 
@@ -215,7 +219,7 @@ Functional changes (also marked by `MOD:` in the source):
 - First tap aligns LFO/LED to the downbeat without changing Speed.
 - Tap-session timeout capped at 2.5 s (first-tap window too). Hydra used uncapped 3× tempo and a 1.5 s first-tap window.
 - LFO period range 50-2000 ms instead of Hydra delay 150-920 ms.
-- Long-press is a Leslie ramp (2× Speed while held, ramp back on release; `Speed Pot` sets ramp velocity), not a bounce through the whole delay range.
+- Long-press is a Leslie ramp (2× faster while held, or 2× slower if period is under 300 ms; ramp back on release; `Speed Pot` sets ramp velocity), not a bounce through the whole delay range.
 - Short tap then long press cycles Random algorithm (Hybrid / S&H / Wander); LED blinks 1-3 times, stored in EEPROM, announced on power-up if Random shape is selected.
 
 ## License

@@ -23,8 +23,9 @@
  * - First tap aligns LFO/LED to the downbeat without changing rate
  * - Tap-session timeout capped at c_tap_end_max (first-tap window too)
  * - LFO period range 50-2000 ms instead of Hydra delay 150-920 ms
- * - Long-press is a Leslie ramp (2x speed while held, ramp back on release;
- *   Speed pot sets ramp velocity), not a bounce through the whole delay range
+ * - Long-press is a Leslie ramp (2x faster while held, or 2x slower if already
+ *   fast; ramp back on release; Speed pot sets ramp velocity), not a bounce
+ *   through the whole delay range
  * - Short tap then long press cycles Random algorithm (hybrid / S&H / wander);
  *   LED blinks 1-3 times to show the mode; stored in EEPROM
  *
@@ -106,6 +107,8 @@ const uint16_t c_tap_end_max = 2500;
 const uint16_t c_random_hybrid_ms = 400;
 // Leslie hold: Speed multiplier (2 = twice as fast = half period). Integer; 3 = 3x, etc.
 const uint8_t c_leslie_speed = 2;
+// Leslie: if current period [ms] is below this, hold slows (× multiplier) instead of speeds (/ multiplier).
+const uint16_t c_leslie_slowdown_ms = 300;
 
 // On-off-on shape switch: midpoints between 0, ~512, 1023
 const uint16_t c_shape_mid_lo = 256;
@@ -830,24 +833,45 @@ int main(void)
                 }
                 else
                 {
-                    // Hold: ramp to c_leslie_speed × LFO Speed. Release: ramp back to the original period.
+                    // Hold: ramp by c_leslie_speed. Below c_leslie_slowdown_ms → slower (×);
+                    // otherwise faster (/). Release: ramp back to the original period.
                     // Speed pot sets how fast that change happens (higher = faster ramp).
                     uint16_t ramp_origin = divtempo;
-                    uint16_t ramp_target = ramp_origin / c_leslie_speed;
-                    if (ramp_target < c_lfo_min)
+                    uint16_t ramp_target;
+                    if (ramp_origin < c_leslie_slowdown_ms)
                     {
-                        ramp_target = c_lfo_min;
+                        uint32_t slow = (uint32_t)ramp_origin * c_leslie_speed;
+                        if (slow > c_lfo_max)
+                        {
+                            ramp_target = c_lfo_max;
+                        }
+                        else
+                        {
+                            ramp_target = (uint16_t)slow;
+                        }
                     }
-                    uint8_t to_fast = 1;
+                    else
+                    {
+                        ramp_target = ramp_origin / c_leslie_speed;
+                        if (ramp_target < c_lfo_min)
+                        {
+                            ramp_target = c_lfo_min;
+                        }
+                    }
+                    uint8_t to_target = 1;
 
                     for (;;)
                     {
                         uint8_t held = !(PORTA.IN & (1 << TAP_PIN));
-                        if (to_fast)
+                        if (to_target)
                         {
                             if (!held)
                             {
-                                to_fast = 0; // released - start slowing back
+                                to_target = 0; // released - start returning
+                            }
+                            else if (divtempo < ramp_target)
+                            {
+                                divtempo++;
                             }
                             else if (divtempo > ramp_target)
                             {
@@ -858,11 +882,15 @@ int main(void)
                         {
                             if (held)
                             {
-                                to_fast = 1; // pressed again during slowdown
+                                to_target = 1; // pressed again during return
                             }
                             else if (divtempo < ramp_origin)
                             {
                                 divtempo++;
+                            }
+                            else if (divtempo > ramp_origin)
+                            {
+                                divtempo--;
                             }
                             else
                             {
