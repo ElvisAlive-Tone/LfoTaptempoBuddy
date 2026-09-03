@@ -54,7 +54,6 @@
 #include <avr/interrupt.h>
 #define F_CPU 20000000UL
 #include <util/delay.h>
-#include <stdlib.h>
 
 #define PWM_PIN 3 // PWM is the analog LFO after RC filtering
 #define TAP_PIN 6
@@ -122,6 +121,7 @@ volatile char revision[] = "rev_1";
 volatile uint16_t pot;         // current Pot value is stored here from ADC by interrupt handler
 volatile uint16_t divsw;       // current shape-switch ADC value (AIN2)
 volatile uint8_t adc_shape_ok; // 1 after AIN2 has been sampled at least once
+static volatile uint8_t adc_mux_settle; // 1 = discard next result (S/H cap still settling after MUX change)
 volatile uint16_t pwm = 500;   // current PWM sample (0..c_pwm_max), written by LFO in TCA ISR
 volatile uint16_t ms;          // time [ms] counter for Tap button pressed length and delayed `tap` reset in EEPROM respectively. Incremented in TCA interrupt.
 
@@ -171,33 +171,45 @@ void ADC_Config(void)
     ADC0.INTCTRL = ADC_RESRDY_bm;
     // 10bits freerun & enable
     ADC0.CTRLA |= ADC_ENABLE_bm | ADC_RESSEL_10BIT_gc | ADC_FREERUN_bm;
+    adc_mux_settle = 1; // discard first conversion after enable
     // Start conversion
     ADC0.COMMAND = ADC_STCONV_bm;
 }
 
 // interrupt handler for ADC
 // ADC mux: pot (AIN1) and on-off-on shape switch (AIN2)
+// Discard the first conversion after each MUX change — the sample cap still
+// holds the previous channel (shape sits at ~VCC/2, which pulled pot toward center).
 ISR(ADC0_RESRDY_vect)
 {
-    switch (ADC0.MUXPOS)
+    if (adc_mux_settle)
     {
-    case ADC_MUXPOS_AIN1_gc:
-        pot = ADC0.RES;
-        ADC0.MUXPOS = ADC_MUXPOS_AIN2_gc; // next conversion: shape
-        break;
+        adc_mux_settle = 0;
+    }
+    else
+    {
+        switch (ADC0.MUXPOS)
+        {
+        case ADC_MUXPOS_AIN1_gc:
+            pot = ADC0.RES;
+            ADC0.MUXPOS = ADC_MUXPOS_AIN2_gc;
+            adc_mux_settle = 1;
+            break;
 
-    case ADC_MUXPOS_AIN2_gc:
-        divsw = ADC0.RES;
-        adc_shape_ok = 1;
-        ADC0.MUXPOS = ADC_MUXPOS_AIN1_gc; // next conversion: pot
-        break;
+        case ADC_MUXPOS_AIN2_gc:
+            divsw = ADC0.RES;
+            adc_shape_ok = 1;
+            ADC0.MUXPOS = ADC_MUXPOS_AIN1_gc;
+            adc_mux_settle = 1;
+            break;
 
-    default:
-        ADC0.MUXPOS = ADC_MUXPOS_AIN1_gc;
-        break;
+        default:
+            ADC0.MUXPOS = ADC_MUXPOS_AIN1_gc;
+            adc_mux_settle = 1;
+            break;
+        }
     }
 
-    // Clear interrupt flag
     ADC0.INTFLAGS = ADC_RESRDY_bm;
 }
 
@@ -400,6 +412,11 @@ static inline void snap_adc(uint16_t *p, uint16_t *d)
     *p = pot;
     *d = divsw;
     sei();
+}
+
+static inline uint16_t adc_delta(uint16_t a, uint16_t b)
+{
+    return (a > b) ? (a - b) : (b - a);
 }
 
 // On-off-on: GND / ~VCC/2 / VCC → layer 0 / 1 / 2
@@ -660,7 +677,7 @@ int main(void)
 
         // TIME POT handling
         // if pot move of more than 5%, changing to pot control
-        if ((tap == 1 && tapping == 0 && abs(previouspot - pot_now) >= 50) || (tap == 0 && tapping == 0 && abs(previouspot - pot_now) >= 10))
+        if ((tap == 1 && tapping == 0 && adc_delta(previouspot, pot_now) >= 50) || (tap == 0 && tapping == 0 && adc_delta(previouspot, pot_now) >= 10))
         {
             divtempo = pot_to_period(pot_now);
             set_lfo_period(divtempo, 0);
@@ -712,6 +729,7 @@ int main(void)
 
                     // reset state machine
                     tap = 1;
+                    previouspot = pot_now;
                     ms = 0;
                     nbtap = 0;
                     tapping = 0;
@@ -754,6 +772,7 @@ int main(void)
                 set_lfo_period(divtempo, 1);
                 nbtap = 2;
                 tap = 1;
+                previouspot = pot_now;
                 ms = 0;
                 second_down = 0;
                 first_tap_released = 0;
@@ -801,6 +820,7 @@ int main(void)
                 laststate = 1;
                 ms = 0;
                 tap = 1;
+                previouspot = pot_now;
             }
         }
         else if (currentstate == 1 && laststate == 1) // Tap button keeps on

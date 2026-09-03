@@ -63,7 +63,7 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
   - `VCC` - 5V power, but can run on 3.3V also
   - You can use a connector to disconnect module easily for programming, spacing on PCB is 2.54mm for it.
 - `Speed Pot` - connect pot's 1, 2 and 3 lugs to the module's `P1`, `P2` and `P3`.
-  Use `B` type pot, from `B10k` up to `B100k`. Higher voltage is higher LFO Speed (shorter LFO period).
+  Use `B` type pot, ideally `B10k`. Higher voltage is higher LFO Speed (shorter LFO period).
 - `Tap Button` - connect momentary button to the module's `TAP` pads.
 - `LED` - connect LED to the module's `L+` and `L-`. Use `TL` trimmer to set LED's brightness. Used `2k` value should
   be OK for the most LED types, if too small for your LED, use higher trimmer value, or connect additional resistor
@@ -99,8 +99,8 @@ PCB BOM:
 
 | Markings           | Value             | PCB packaging type                                    |
 | ------------------ | ----------------- | ----------------------------------------------------- |
-| R1, R2             | 1k                | 1206                                                  |
-| R4, R5, R6         | 10k               | 1206                                                  |
+| R1, R2, R4         | 1k                | 1206                                                  |
+| R5, R6             | 10k               | 1206                                                  |
 | C1, C3, C4         | 100n              | 1206                                                  |
 | C2                 | 1u                | 5mm                                                   |
 | TL                 | 2k or 5k          | 3362 trimmer                                          |
@@ -113,7 +113,7 @@ External components:
 
 | Markings     | Value                  |
 | ------------ | ---------------------- |
-| `Speed Pot`  | B10k - B100k           |
+| `Speed Pot`  | B10k                   |
 | LED          | any color and size LED |
 | `Tap Button` | any momentary switch   |
 | `Shape`      | SPDT on-off-on         |
