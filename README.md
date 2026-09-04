@@ -2,9 +2,9 @@
 
 Small but powerful ATtiny402 based tap-tempo LFO firmware. Output is a waveform (Sin, Triangle, Pulse, Ramp up,
 Ramp down, Random) at the Speed set by the `Speed Pot` or by tapping. Multiple Random algorithms.
-Leslie like speed change on long tap (faster, or slower when already fast). Intended for tremolo and similar analog modulation effects.
+Leslie like speed change on long tap (faster, or slower when already fast). Intended for tremolo, phaser, vibe and similar analog modulation effects.
 
-This is an adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAlive-Tone/HydraDelayTaptempoBuddy).
+This project is adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAlive-Tone/HydraDelayTaptempoBuddy).
 
 **Tip:** You can use my [Simple Serial UPDI programmer](https://github.com/ElvisAlive-Tone/updipcb) to program the microcontroller for this project.
 
@@ -148,27 +148,51 @@ PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO appears after 
 const uint16_t c_pot_catchup_ms = 40; // minimum catch-up window [ms]; also 5% of sounding period
 ```
 
-### Leslie Speed
+### Leslie speed & ramp
 
-Holding `Tap button` (from rest, over 500 ms) ramps Speed by a multiplier. **Latch** only if you release **at** the 2×/½ target; release earlier and Speed glides home without latching.
+Long `Tap Button` hold (from rest, over 500 ms) glides LFO rate toward **2×** or **½**; while held, `Speed Pot` sets glide time, not LFO period. Constants are in `firmware/src/main.c`. See **Leslie** under [Features](#features) for latch, unlatch, and footswitch behavior.
 
-The multiplier is `c_leslie_speed` in `firmware/src/main.c`. Default is 2. Use 3 for 3x, and so on — integer only.
+**Speed multiplier** — `c_leslie_speed`. Default **2** (integer only; use 3 for 3×, and so on).
 
-- If the current period is **at or above** `c_leslie_slowdown_ms`, hold speeds up: period becomes `period / c_leslie_speed`, clamped at `c_lfo_min` (50 ms).
-- If the current period is **below** `c_leslie_slowdown_ms` (already high Speed), hold slows down: period becomes `period * c_leslie_speed`, clamped at `c_lfo_max` (2000 ms).
+```c
+const uint8_t c_leslie_speed = 2;
+```
 
-`c_leslie_slowdown_ms` defaults to 300 (~3.3 Hz).
+**Why 2× by default?** A real Leslie cabinet jumps roughly **8×** between chorale (~40–48 RPM) and tremolo (~340–400 RPM). This feature borrows the *gesture* (hold to shift speed, latch, glide back), not that ratio — it drives a single tremolo LFO, not separate treble/bass rotors with inertia. **2×** (one octave of rate) is a practical default: clearly audible (e.g. 500 ms → 250 ms), predictable, and from typical slow settings it stays inside the 50–2000 ms range without slamming the fastest limit. Most of the “Leslie” feel here comes from glide time, not the endpoint ratio. For a bolder shift, try **3×**; values near **8×** usually hit the 50 ms floor from moderate base speeds and are a poor fit for this LFO.
 
-`Speed Pot` sets the **total glide time** for a full 2×/½ ramp leg (constant rate over the distance), not the LFO period:
+**Direction threshold** — `c_leslie_slowdown_ms`. Default **300** (~3.3 Hz). Chooses whether hold speeds up or slows down:
+
+```c
+const uint16_t c_leslie_slowdown_ms = 300;
+```
+
+- Period **at or above** the threshold → hold speeds up: `period / c_leslie_speed`, clamped at `c_lfo_min` (50 ms).
+- Period **below** the threshold → hold slows down: `period * c_leslie_speed`, clamped at `c_lfo_max` (2000 ms).
+
+**Latch** — `c_leslie_latch`. Default **1**. When **1**, release at the Leslie target stays there (see **Leslie** in Features). When **0**, release at target glides back to the origin — momentary Leslie only; latched-state footswitch rules do not apply.
+
+```c
+const uint8_t c_leslie_latch = 1;  // 1 = latch at target on release; 0 = always return to origin
+```
+
+**Glide time** — `c_leslie_ramp_min_ms` / `c_leslie_ramp_max_ms`. Total time for a full 2×/½ leg (constant rate over the distance):
 
 ```c
 const uint16_t c_leslie_ramp_min_ms = 300;  // Speed pot max — ~0.3 s full glide
 const uint16_t c_leslie_ramp_max_ms = 8000; // Speed pot min — ~8 s full glide
 ```
 
-The map is quadratic on the slow end of the pot so fine control sits in the longer ramps. Examples at 500 ms → 250 ms (speed-up): ~8 s with pot at minimum, ~2.2 s at mid, ~0.3 s at maximum.
+The map is quadratic on the slow end of the pot so fine control sits in the longer ramps. While Leslie is held, the pot sets ramp time only (re-sampled live during the hold). Approximate full **2×** leg (e.g. 500 ms → 250 ms) vs. pot rotation — **0%** = slowest LFO end, **100%** = fastest:
 
-**Latched Leslie:** sitting at 2×/½ after release at the target. Short tap only phase-aligns (foot down). Committed tap tempo (two or more taps), pot catch-up, or a long hold from rest (unlatch) exits Leslie. Leslie and unlatch long holds do **not** phase-shift — any foot-down sync from the start of the hold is undone when the glide begins at 500 ms. Unlatch ramps home while held; releasing the foot early still finishes the glide to the saved origin. On any return ramp (initial or unlatch), the glide continues foot up and a new press steers back toward the Leslie target. Power-off does not save the latched rate.
+| Pot | Full glide |
+| --- | --- |
+| 0% (min) | ~8 s |
+| 25% | ~4.6 s |
+| 50% | ~2.2 s |
+| 75% | ~0.8 s |
+| 100% (max) | ~0.3 s |
+
+**Why up to 8 s?** A real Leslie slews in about **1–2 s**; mid pot (~2 s) is closest to that. **8 s** exists only at minimum — slow, ambient rate morphs, not a classic chorale→tremolo kick. Multi-second ramps also need a matching foot hold to reach the target and latch. For a tighter Leslie feel, lower `c_leslie_ramp_max_ms` (e.g. 3000–4000); the bottom ~25% of the pot is where 5 s+ glides live.
 
 ### Random shape algorithm
 
@@ -239,9 +263,9 @@ Functional changes (also marked by `MOD:` in the source):
 - First tap aligns LFO/LED to the downbeat without changing Speed.
 - Tap-session timeout capped at 2.5 s (first-tap window too). Hydra used uncapped 3× tempo and a 1.5 s first-tap window.
 - LFO period range 50-2000 ms instead of Hydra delay 150-920 ms.
-- Long-press is a latching Leslie ramp (2× faster while held, or 2× slower if period is under 300 ms; latch only when released at the target; early release or unlatch glides home, continuing foot up; `Speed Pot` sets glide time while held).
+- Long-press is a **Leslie** function, not **Ramp**.
 - Speed pot log map and catch-up takeover from tap or latched Leslie.
-- Short tap then long press cycles Random algorithm (Hybrid / S&H / Wander); LED blinks 1-3 times, stored in EEPROM, announced on power-up if Random shape is selected.
+- Short tap then long press cycles Random algorithm (Hybrid / S&H / Wander).
 
 ## License
 

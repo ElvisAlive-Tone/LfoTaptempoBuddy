@@ -115,6 +115,8 @@ const uint16_t c_leslie_slowdown_ms = 300;
 // Leslie ramp: total glide time [ms] from Speed pot (higher pot = faster). Quadratic taper on slow end.
 const uint16_t c_leslie_ramp_min_ms = 300;  // Speed pot max — ~0.3 s full 2×/½ glide
 const uint16_t c_leslie_ramp_max_ms = 8000; // Speed pot min — ~8 s full glide
+// Leslie latch: 1 = release at target stays latched; 0 = release always glides back to origin.
+const uint8_t c_leslie_latch = 1;
 // Pot catch-up: take over tap/Leslie when pot-mapped period is within this window [ms]
 const uint16_t c_pot_catchup_ms = 40;
 
@@ -1043,9 +1045,18 @@ int main(void)
                             }
                             else if (divtempo == leslie_target)
                             {
-                                leslie_latched = 1;
-                                leslie_origin = saved_origin;
-                                break;
+                                if (c_leslie_latch)
+                                {
+                                    leslie_latched = 1;
+                                    leslie_origin = saved_origin;
+                                    break;
+                                }
+                                toward_leslie = 0;
+                                ramp_leg_span = period_delta(divtempo, saved_origin);
+                                if (ramp_leg_span < 1)
+                                {
+                                    ramp_leg_span = 1;
+                                }
                             }
                             else
                             {
