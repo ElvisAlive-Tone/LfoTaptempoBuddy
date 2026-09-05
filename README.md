@@ -1,8 +1,9 @@
 # LFO Taptempo Buddy
 
-Small but powerful ATtiny402 based tap-tempo LFO firmware. Output is a waveform (Sin, Triangle, Pulse, Ramp up,
+Small but powerful ATtiny402/412 based tap-tempo LFO module and firmware. Output is a waveform (Sin, Triangle, Pulse, Ramp up,
 Ramp down, Random) at the Speed set by the `Speed Pot` or by tapping. Multiple Random algorithms.
-Leslie like speed change on long tap (faster, or slower when already fast). Intended for tremolo, phaser, vibe and similar analog modulation effects.
+Leslie like speed change on long tap (faster, or slower when already fast).
+Intended for tremolo, phaser, vibe and similar modulation effects.
 
 This project is adaptation of [Hydra Delay Taptempo Buddy](https://github.com/ElvisAlive-Tone/HydraDelayTaptempoBuddy).
 
@@ -34,15 +35,15 @@ This project is adaptation of [Hydra Delay Taptempo Buddy](https://github.com/El
   - `LED` blinks **1 / 2 / 3** times (Hybrid / S&H / Wander) to indicate the selected algorithm.
   - The same blink is shown on power-up when Random is selected. See [Random shape algorithm](#random-shape-algorithm).
 - **Leslie** — long `Tap Button` press from rest (over 500 ms, no short tap before it):
-  - **While held:** Speed glides toward **2×** (half period, min 50 ms) when period is **300 ms or longer**, or toward **½** (double period, max 2000 ms) when already faster. `Speed Pot` sets glide time (~0.3–8 s for a full leg), not LFO period. Tap is occupied — no tap tempo, Random cycle, or hold-flip. Foot-down at the start of the hold does **not** phase-sync once the ramp begins at 500 ms.
-  - **Release at the Leslie target** (2× or ½) → **latch** there; pre-Leslie Speed is remembered but not written to EEPROM.
-  - **Release before target** → glide back to the saved origin without latching; glide continues if you lift your foot; press again to ramp toward Leslie.
-  - **While latched** (foot up):
-    - Short tap — downbeat align only; stay latched.
-    - Tap session (two or more taps) — new Speed; Leslie cancelled.
-    - Short tap, then long hold — Random cycle; stay latched.
-    - `Speed Pot` catch-up — Leslie cancelled (see above).
-    - Long hold from rest — unlatch; glide to saved origin (early release finishes foot up; press again during glide to head back toward Leslie).
+  - **While held:** Speed glides toward **2×** (half period, min 50 ms) when current speed is **300ms or slover**, or toward **1/2x** (double period, max 2000 ms) when faster. `Speed Pot` defines glide time (~0.3–8s). Long tap is occupied — no tap tempo, Random cycle, or hold-flip. Foot-down at the start of the hold does **not** phase-sync LFO.
+  - **Release at the Leslie target** (2× or 1/2x) -> **latch** there, pre-Leslie Speed is remembered.
+  - **Release before target** -> glide back to the origin speed without latching, press again to ramp toward Leslie.
+  - **While latched**:
+    - Short tap — downbeat align only, stay latched.
+    - Tap session (two or more short taps) — new Speed, Leslie cancelled.
+    - Short tap then long hold — Random cycle change, stay latched.
+    - `Speed Pot` catch-up — Leslie cancelled.
+    - Long hold from rest — unlatch, glide to remembered origin even if you release early, long tap again during that glide to head back toward Leslie.
 - Current `Speed Pot`/`Tap Button` control state, tapped-in Speed, Random algorithm, and shape bank are preserved over power-off. Latched Leslie Speed is **not** stored — boot restores the last non-Leslie Speed.
 - Trimmer or fixed resistor to set LED brightness.
 - UPDI pins to re-program the soldered microcontroller.
@@ -54,6 +55,7 @@ This project is adaptation of [Hydra Delay Taptempo Buddy](https://github.com/El
 - `LFOBuddy.dch` - schematics
 - `LFOBuddy-rev1_gerber.zip` - Gerber file for PCB fabrication
 - `LFOBuddy.dip` - PCB design file
+- `ExampleLedDriver.dch` - schematics of the LED driver example
 
 Schematics and PCB design file can be opened/edited by [DipTrace](https://diptrace.com/).
 
@@ -68,8 +70,8 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
 - `Speed Pot` - connect pot's 1, 2 and 3 lugs to the module's `P1`, `P2` and `P3`.
   Use `B` type pot, ideally `B10k`. Higher voltage is higher LFO Speed (shorter LFO period). The firmware uses a **logarithmic** map so more of the pot's travel sits in the ~200–800 ms range.
 - `Tap Button` - connect momentary button to the module's `TAP` pads.
-- `LED` - connect LED to the module's `L+` and `L-`. Use `TL` trimmer to set LED's brightness. Used `2k` value should
-  be OK for the most LED types, if too small for your LED, use higher trimmer value, or connect additional resistor
+- `LED` - connect LED to the module's `L+` and `L-`. Use `TL` trimmer to set LED's brightness. Used `5k` value should
+  be OK for the most LED types and 5V internal VCC, if too small for your LED, use higher trimmer value, or connect additional resistor
   in series. Alternatively use fixed value resistor `RL` if you figured out exact value and wanna to save some space.
 - `Shape` switch - SPDT **on-off-on**. Common to `SH`. Throws to `SHG` and `SHV`. Left of `/` is the normal bank (no hold), right is the alt bank (hold Tap).
   ```
@@ -149,15 +151,15 @@ Source code contains constants for the LFO period range and tap timeout. Change 
 ```c
 const uint16_t c_lfo_max = 2000;   // slowest LFO period [ms] (~0.5 Hz) - Speed pot on minimum
 const uint16_t c_lfo_min = 50;     // fastest LFO period [ms] (~20 Hz) - Speed pot on maximum
-const uint16_t c_lfo_range = 1950; // c_lfo_max - c_lfo_min [ms]
+const uint16_t c_lfo_range = 1950; // MUST MATCH c_lfo_max - c_lfo_min [ms]!
 const uint16_t c_tap_end_max = 2500; // max wait for the next tap [ms]; must be > c_lfo_max
 ```
 
-PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO appears after the RC filter on `OUT`.
+Output PWM carrier is 20 kHz, range `0..c_pwm_max` (999). The analog LFO waveform appears after the RC filter on `OUT`.
 
 ### Speed pot mapping
 
-`pot_to_period()` uses a 64-step log LUT (`period_log_lut` in `firmware/src/main.c`) so more physical pot travel covers ~200–800 ms. Use a linear **B** pot; catch-up and tap/pot handoff use the same map.
+`pot_to_period()` uses a 64-step log LUT (`period_log_lut` in `firmware/src/main.c`) so more physical pot travel covers ~200–800 ms. Use a linear **B** pot, catch-up and tap/pot handoff use the same map.
 
 ```c
 const uint16_t c_pot_catchup_ms = 40; // minimum catch-up window [ms]; also 5% of sounding period
@@ -165,7 +167,7 @@ const uint16_t c_pot_catchup_ms = 40; // minimum catch-up window [ms]; also 5% o
 
 ### Leslie speed & ramp
 
-Long `Tap Button` hold (from rest, over 500 ms) glides LFO rate toward **2×** or **½**; while held, `Speed Pot` sets glide time, not LFO period. Constants are in `firmware/src/main.c`. See **Leslie** under [Features](#features) for latch, unlatch, and footswitch behavior.
+Long `Tap Button` hold (from rest, over 500 ms) glides LFO rate toward **2×** or **½** while held, `Speed Pot` defines glide time. Constants are in `firmware/src/main.c`. See **Leslie** under [Features](#features) for latch, unlatch, and footswitch behavior.
 
 **Speed multiplier** — `c_leslie_speed`. Default **2** (integer only; use 3 for 3×, and so on).
 
@@ -173,9 +175,9 @@ Long `Tap Button` hold (from rest, over 500 ms) glides LFO rate toward **2×** o
 const uint8_t c_leslie_speed = 2;
 ```
 
-**Why 2× by default?** A real Leslie cabinet jumps roughly **8×** between chorale (~40–48 RPM) and tremolo (~340–400 RPM). This feature borrows the _gesture_ (hold to shift speed, latch, glide back), not that ratio — it drives a single tremolo LFO, not separate treble/bass rotors with inertia. **2×** (one octave of rate) is a practical default: clearly audible (e.g. 500 ms → 250 ms), predictable, and from typical slow settings it stays inside the 50–2000 ms range without slamming the fastest limit. Most of the “Leslie” feel here comes from glide time, not the endpoint ratio. For a bolder shift, try **3×**; values near **8×** usually hit the 50 ms floor from moderate base speeds and are a poor fit for this LFO.
+**Why 2× by default?** A real Leslie cabinet jumps roughly **8×** between chorale (~40–48 RPM) and tremolo (~340–400 RPM). This feature borrows the _idea_ (hold to shift speed, latch, glide back), not that ratio — it drives a single tremolo LFO, not separate treble/bass rotors with inertia. **2×** (one octave of rate) is a practical default: clearly audible (e.g. 500 ms -> 250 ms) but predictable, without slamming the speed limits. Most of the “Leslie” feel here comes from speed glide, not the endpoint ratio. For a bolder shift try **3×**, values near **8×** usually hit the 50 ms floor from moderate base speeds and are a poor fit for this LFO.
 
-**Direction threshold** — `c_leslie_slowdown_ms`. Default **300** (~3.3 Hz). Chooses whether hold speeds up or slows down:
+**Direction threshold** — `c_leslie_slowdown_ms`. Default **300** (~3.3 Hz). Chooses speed threshold where hold speeds up or slows down:
 
 ```c
 const uint16_t c_leslie_slowdown_ms = 300;
@@ -184,7 +186,7 @@ const uint16_t c_leslie_slowdown_ms = 300;
 - Period **at or above** the threshold → hold speeds up: `period / c_leslie_speed`, clamped at `c_lfo_min` (50 ms).
 - Period **below** the threshold → hold slows down: `period * c_leslie_speed`, clamped at `c_lfo_max` (2000 ms).
 
-**Latch** — `c_leslie_latch`. Default **1**. When **1**, release at the Leslie target stays there (see **Leslie** in Features). When **0**, release at target glides back to the origin — momentary Leslie only; latched-state footswitch rules do not apply.
+**Latch** — `c_leslie_latch`. Default **1**. When **1**, release at the Leslie target stays there (see **Leslie** in Features). When **0**, release at target also immediatelly glides back to the origin, without latching.
 
 ```c
 const uint8_t c_leslie_latch = 1;  // 1 = latch at target on release; 0 = always return to origin
@@ -193,8 +195,8 @@ const uint8_t c_leslie_latch = 1;  // 1 = latch at target on release; 0 = always
 **Glide time** — `c_leslie_ramp_min_ms` / `c_leslie_ramp_max_ms`. Total time for a full 2×/½ leg (constant rate over the distance):
 
 ```c
-const uint16_t c_leslie_ramp_min_ms = 300;  // Speed pot max — ~0.3 s full glide
-const uint16_t c_leslie_ramp_max_ms = 8000; // Speed pot min — ~8 s full glide
+const uint16_t c_leslie_ramp_min_ms = 300;  // Speed pot max — ~0.3s full glide
+const uint16_t c_leslie_ramp_max_ms = 8000; // Speed pot min — ~8s full glide
 ```
 
 The map is quadratic on the slow end of the pot so fine control sits in the longer ramps. While Leslie is held, the pot sets ramp time only (re-sampled live during the hold). Approximate full **2×** leg (e.g. 500 ms → 250 ms) vs. pot rotation — **0%** = slowest LFO end, **100%** = fastest:
@@ -207,7 +209,7 @@ The map is quadratic on the slow end of the pot so fine control sits in the long
 | 75%        | ~0.8 s     |
 | 100% (max) | ~0.3 s     |
 
-**Why up to 8 s?** A real Leslie slews in about **1–2 s**; mid pot (~2 s) is closest to that. **8 s** exists only at minimum — slow, ambient rate morphs, not a classic chorale→tremolo kick. Multi-second ramps also need a matching foot hold to reach the target and latch. For a tighter Leslie feel, lower `c_leslie_ramp_max_ms` (e.g. 3000–4000); the bottom ~25% of the pot is where 5 s+ glides live.
+**Why up to 8s?** A real Leslie slews in about **1–2s**; mid pot (~2s) is closest to that. **8s** is for slow, ambient rate morphs, not a classic chorale->tremolo kick. Multi-second ramps also need a matching foot hold to reach the target and latch. For a tighter Leslie feel, lower `c_leslie_ramp_max_ms` (e.g. 3000–4000).
 
 ### Random shape algorithm
 
@@ -227,7 +229,6 @@ The LED then blinks the new algorithm. The choice is stored in EEPROM, so it sur
 - 3 blinks — Wander
 
 The same blinks happen at power-up, but only if Random shape is already selected (so other shapes do not look like an algorithm change).
-
 To always blink on power-up, set `ANNOUNCE_RANDOM_ON_BOOT_ALWAYS` to `1` in `firmware/src/main.c`.
 
 A blank chip starts in Hybrid. To change that default, edit `LFO_RANDOM_MODE` in the same file.
