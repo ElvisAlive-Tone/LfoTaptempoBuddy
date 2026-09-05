@@ -62,8 +62,8 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
 - Plan module and controls (`Tap Button`, `Shape` on-off-on, `Speed Pot`, `LED`) placement. Use long enough wires.
 - Power and output:
   - `GND` - ground
-  - `OUT` - LFO voltage
-  - `VCC` - 5V power, but can run on 3.3V also
+  - `OUT` - LFO voltage with 0..5V swing (or 3.3V if VCC is 3.3V only)
+  - `VCC` - 7V+ or 5V/3.3V power, see note in _Building module_
   - You can use a connector to disconnect module easily for programming, spacing on PCB is 2.54mm for it.
 - `Speed Pot` - connect pot's 1, 2 and 3 lugs to the module's `P1`, `P2` and `P3`.
   Use `B` type pot, ideally `B10k`. Higher voltage is higher LFO Speed (shorter LFO period). The firmware uses a **logarithmic** map so more of the pot's travel sits in the ~200–800 ms range.
@@ -85,10 +85,25 @@ Schematics and PCB design file can be opened/edited by [DipTrace](https://diptra
 Analog `OUT` is the LFO control voltage PWM:
 
 - PCB contains simple filter to smooth it out. Cut frequency should be 100–200Hz, so eg. R=1kohm and C=1uF is good into high-Z load. So buffer it, or adjust filter for small-Z loads.
-- Maximal amplitude is VCC (5V or 3.3V), so scaling may be necessary fo rnext circuitry
+- Maximal amplitude is module VCC (5V or 3.3V), so scaling may be necessary for next circuitry
 - You have to implement LFO `Depth` pot if you want it.
 
-Exact circuitry consuming this module output depends on how do you want to drive the rest of the pedal circuit - VACTROL LED/s, lamp, JFETs etc.
+Exact circuitry consuming this module's output depends on how do you want to drive the rest of the pedal circuit - LDR LED/s, lamp, JFETs etc.
+
+Example driver for optical harmonic tremolo/trmolo/vibe:
+
+<img src="img/exampleLedDriver.png" width="400px" alt="Example LED Driver">
+
+Notes:
+
+- Expects normal OpAmps without rail-to-rail output, eg. TL07x
+- `VCC` - pedal VCC (9V), not LFO taptempo module VCC (5V). OpAmps run on it also.
+- `LFO` - signal from LFO taptempo module with 5V amplitude
+- `C1` - decouples LFO swing baseline (2.5V) from driver baseline (4.5V) created by `U3`, injected by `R7` and `R4`.
+- `Scale` trimmer - use it to set maximal unclamped LFO signal at `U2` output
+- `D1`, `D2` - LDR LEDs for optical harmonic tremolo, only one (whichever) for normal tremolo or vibe
+- `R5`, `R6` - adjust for your LEDs if necessary to get correct brightness
+- `R3` - removes dead end of `Depth` pot, adjust if necessary
 
 ## Building module
 
@@ -158,7 +173,7 @@ Long `Tap Button` hold (from rest, over 500 ms) glides LFO rate toward **2×** o
 const uint8_t c_leslie_speed = 2;
 ```
 
-**Why 2× by default?** A real Leslie cabinet jumps roughly **8×** between chorale (~40–48 RPM) and tremolo (~340–400 RPM). This feature borrows the *gesture* (hold to shift speed, latch, glide back), not that ratio — it drives a single tremolo LFO, not separate treble/bass rotors with inertia. **2×** (one octave of rate) is a practical default: clearly audible (e.g. 500 ms → 250 ms), predictable, and from typical slow settings it stays inside the 50–2000 ms range without slamming the fastest limit. Most of the “Leslie” feel here comes from glide time, not the endpoint ratio. For a bolder shift, try **3×**; values near **8×** usually hit the 50 ms floor from moderate base speeds and are a poor fit for this LFO.
+**Why 2× by default?** A real Leslie cabinet jumps roughly **8×** between chorale (~40–48 RPM) and tremolo (~340–400 RPM). This feature borrows the _gesture_ (hold to shift speed, latch, glide back), not that ratio — it drives a single tremolo LFO, not separate treble/bass rotors with inertia. **2×** (one octave of rate) is a practical default: clearly audible (e.g. 500 ms → 250 ms), predictable, and from typical slow settings it stays inside the 50–2000 ms range without slamming the fastest limit. Most of the “Leslie” feel here comes from glide time, not the endpoint ratio. For a bolder shift, try **3×**; values near **8×** usually hit the 50 ms floor from moderate base speeds and are a poor fit for this LFO.
 
 **Direction threshold** — `c_leslie_slowdown_ms`. Default **300** (~3.3 Hz). Chooses whether hold speeds up or slows down:
 
@@ -184,13 +199,13 @@ const uint16_t c_leslie_ramp_max_ms = 8000; // Speed pot min — ~8 s full glide
 
 The map is quadratic on the slow end of the pot so fine control sits in the longer ramps. While Leslie is held, the pot sets ramp time only (re-sampled live during the hold). Approximate full **2×** leg (e.g. 500 ms → 250 ms) vs. pot rotation — **0%** = slowest LFO end, **100%** = fastest:
 
-| Pot | Full glide |
-| --- | --- |
-| 0% (min) | ~8 s |
-| 25% | ~4.6 s |
-| 50% | ~2.2 s |
-| 75% | ~0.8 s |
-| 100% (max) | ~0.3 s |
+| Pot        | Full glide |
+| ---------- | ---------- |
+| 0% (min)   | ~8 s       |
+| 25%        | ~4.6 s     |
+| 50%        | ~2.2 s     |
+| 75%        | ~0.8 s     |
+| 100% (max) | ~0.3 s     |
 
 **Why up to 8 s?** A real Leslie slews in about **1–2 s**; mid pot (~2 s) is closest to that. **8 s** exists only at minimum — slow, ambient rate morphs, not a classic chorale→tremolo kick. Multi-second ramps also need a matching foot hold to reach the target and latch. For a tighter Leslie feel, lower `c_leslie_ramp_max_ms` (e.g. 3000–4000); the bottom ~25% of the pot is where 5 s+ glides live.
 
